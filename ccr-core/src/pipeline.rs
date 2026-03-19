@@ -18,6 +18,11 @@ const CHUNK_SIZE_LINES: usize = 500;
 pub struct PipelineResult {
     pub output: String,
     pub analytics: Analytics,
+    /// Zoom-In blocks accumulated during this pipeline run.
+    /// Each block holds the original lines from a collapsed/omitted group,
+    /// keyed by the ZI_N ID embedded in the output marker.
+    /// Empty when zoom is not enabled (e.g., `ccr filter`).
+    pub zoom_blocks: Vec<crate::zoom::ZoomBlock>,
 }
 
 pub struct Pipeline {
@@ -101,7 +106,7 @@ impl Pipeline {
         let output_tokens = count_tokens(&text);
         let analytics = Analytics::compute(input_tokens, output_tokens);
 
-        Ok(PipelineResult { output: text, analytics })
+        Ok(PipelineResult { output: text, analytics, zoom_blocks: crate::zoom::drain() })
     }
 
     /// Summarize a single block of text using the context-aware strategy.

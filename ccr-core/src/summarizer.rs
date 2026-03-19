@@ -163,6 +163,16 @@ pub struct SummarizeResult {
 
 // ── Line-level summarization (command output) ─────────────────────────────────
 
+/// Build an omission marker, optionally embedding a Zoom-In expand ID.
+fn make_omission_marker(count: usize, omitted: &[&str]) -> String {
+    if crate::zoom::is_enabled() && count > 0 && !omitted.is_empty() {
+        let id = crate::zoom::register(omitted.iter().map(|s| s.to_string()).collect());
+        format!("[... {} lines omitted — ccr expand {} ...]", count, id)
+    } else {
+        format!("[... {} lines omitted ...]", count)
+    }
+}
+
 /// Standard anomaly-based summarization: keeps outlier lines (errors, unique events)
 /// and suppresses repetitive noise that clusters near the centroid.
 pub fn summarize(text: &str, budget_lines: usize) -> SummarizeResult {
@@ -291,10 +301,10 @@ fn summarize_semantic_intent(
         if let Some(prev) = prev_idx {
             let gap = idx - prev - 1;
             if gap > 0 {
-                result.push(format!("[... {} lines omitted ...]", gap));
+                result.push(make_omission_marker(gap, &lines[prev + 1..*idx]));
             }
         } else if *idx > 0 {
-            result.push(format!("[... {} lines omitted ...]", idx));
+            result.push(make_omission_marker(*idx, &lines[0..*idx]));
         }
         result.push(lines[*idx].to_string());
         prev_idx = Some(*idx);
@@ -302,7 +312,7 @@ fn summarize_semantic_intent(
     if let Some(last) = prev_idx {
         let trailing = total - last - 1;
         if trailing > 0 {
-            result.push(format!("[... {} lines omitted ...]", trailing));
+            result.push(make_omission_marker(trailing, &lines[last + 1..]));
         }
     }
 
@@ -417,10 +427,10 @@ fn summarize_semantic(
         if let Some(prev) = prev_idx {
             let gap = idx - prev - 1;
             if gap > 0 {
-                result.push(format!("[... {} lines omitted ...]", gap));
+                result.push(make_omission_marker(gap, &lines[prev + 1..*idx]));
             }
         } else if *idx > 0 {
-            result.push(format!("[... {} lines omitted ...]", idx));
+            result.push(make_omission_marker(*idx, &lines[0..*idx]));
         }
         result.push(lines[*idx].to_string());
         prev_idx = Some(*idx);
@@ -428,7 +438,7 @@ fn summarize_semantic(
     if let Some(last) = prev_idx {
         let trailing = total - last - 1;
         if trailing > 0 {
-            result.push(format!("[... {} lines omitted ...]", trailing));
+            result.push(make_omission_marker(trailing, &lines[last + 1..]));
         }
     }
 
@@ -442,8 +452,12 @@ fn summarize_headtail(lines: &[&str], budget: usize) -> String {
     let omitted = total.saturating_sub(head + tail);
 
     let mut result: Vec<String> = Vec::new();
-    result.extend(lines[..head.min(total)].iter().map(|l| l.to_string()));
-    result.push(format!("[... {} lines omitted ...]", omitted));
+    let head_end = head.min(total);
+    result.extend(lines[..head_end].iter().map(|l| l.to_string()));
+    if omitted > 0 {
+        let tail_start = total.saturating_sub(tail).max(head_end);
+        result.push(make_omission_marker(omitted, &lines[head_end..tail_start]));
+    }
     if tail > 0 && total > head {
         result.extend(lines[total.saturating_sub(tail)..].iter().map(|l| l.to_string()));
     }
@@ -579,10 +593,10 @@ fn summarize_semantic_anchored(
         if let Some(prev) = prev_idx {
             let gap = idx - prev - 1;
             if gap > 0 {
-                result.push(format!("[... {} lines omitted ...]", gap));
+                result.push(make_omission_marker(gap, &lines[prev + 1..*idx]));
             }
         } else if *idx > 0 {
-            result.push(format!("[... {} lines omitted ...]", idx));
+            result.push(make_omission_marker(*idx, &lines[0..*idx]));
         }
         result.push(lines[*idx].to_string());
         prev_idx = Some(*idx);
@@ -590,7 +604,7 @@ fn summarize_semantic_anchored(
     if let Some(last) = prev_idx {
         let trailing = total - last - 1;
         if trailing > 0 {
-            result.push(format!("[... {} lines omitted ...]", trailing));
+            result.push(make_omission_marker(trailing, &lines[last + 1..]));
         }
     }
 
@@ -1054,10 +1068,10 @@ fn summarize_against_centroid_inner(
         if let Some(prev) = prev_idx {
             let gap = idx - prev - 1;
             if gap > 0 {
-                result.push(format!("[... {} lines omitted ...]", gap));
+                result.push(make_omission_marker(gap, &lines[prev + 1..*idx]));
             }
         } else if *idx > 0 {
-            result.push(format!("[... {} lines omitted ...]", idx));
+            result.push(make_omission_marker(*idx, &lines[0..*idx]));
         }
         result.push(lines[*idx].to_string());
         prev_idx = Some(*idx);
@@ -1065,7 +1079,7 @@ fn summarize_against_centroid_inner(
     if let Some(last) = prev_idx {
         let trailing = total - last - 1;
         if trailing > 0 {
-            result.push(format!("[... {} lines omitted ...]", trailing));
+            result.push(make_omission_marker(trailing, &lines[last + 1..]));
         }
     }
 

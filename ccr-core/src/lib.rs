@@ -7,3 +7,4 @@ pub mod sentence;
 pub mod summarizer;
 pub mod tokens;
 pub mod whitespace;
+pub mod zoom;

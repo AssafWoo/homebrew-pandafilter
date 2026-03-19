@@ -5,6 +5,7 @@ mod config_loader;
 mod handlers;
 mod hook;
 mod session;
+mod zoom_store;
 
 #[derive(Parser)]
 #[command(name = "ccr", about = "Cool Cost Reduction — LLM token optimizer")]
@@ -55,6 +56,14 @@ enum Commands {
     },
     /// Scan Claude Code history and report missed optimization opportunities
     Discover,
+    /// Print the original lines from a collapsed or omitted block
+    Expand {
+        /// Zoom block ID shown in compressed output (e.g. ZI_1)
+        id: Option<String>,
+        /// List all available block IDs
+        #[arg(long)]
+        list: bool,
+    },
     /// Compress a conversation JSON to reduce token count
     Compress {
         /// Path to conversation JSON file (use - for stdin)
@@ -99,6 +108,7 @@ fn main() {
         Commands::Rewrite { command } => cmd::rewrite::run(command),
         Commands::Proxy { args } => cmd::proxy::run(args),
         Commands::Discover => cmd::discover::run(),
+        Commands::Expand { id, list } => cmd::expand::run(id.as_deref().unwrap_or(""), list),
         Commands::Compress { input, output, recent_turns, tier1_turns, ollama, ollama_model, max_tokens } =>
             cmd::compress::run(&input, output.as_deref(), recent_turns, tier1_turns, ollama.as_deref(), &ollama_model, max_tokens),
     };

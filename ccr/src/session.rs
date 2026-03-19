@@ -20,10 +20,13 @@ pub struct SessionEntry {
     pub tokens: usize,
     /// BERT embedding of the filtered output (384-dim).
     pub embedding: Vec<f32>,
-    /// First 4000 chars of filtered output — used by delta compression (Idea 3) and
-    /// sentence-level dedup (C1). 4000 chars ≈ 30-50 lines, enough for meaningful
-    /// line-level delta matching. (Was 600, which was too short for real outputs.)
+    /// First 4000 chars of filtered output — used by delta compression and
+    /// sentence-level dedup (C1). 4000 chars ≈ 30-50 lines.
     pub content_preview: String,
+    /// Full content for state commands (git, kubectl, ps, etc.).
+    /// Enables accurate line-level delta beyond the 4000-char preview boundary.
+    #[serde(default)]
+    pub state_content: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -118,15 +121,28 @@ impl SessionState {
     }
 
     /// Record a new output entry, evicting the oldest if over capacity.
+    /// `is_state`: if true (state commands like git, kubectl), stores the full
+    /// content in `state_content` for accurate line-level delta beyond 4000 chars.
     pub fn record(
         &mut self,
         cmd: &str,
         embedding: Vec<f32>,
         tokens: usize,
         content: &str,
+        is_state: bool,
     ) {
         self.total_turns += 1;
         self.total_tokens += tokens;
+
+        const PREVIEW_CHARS: usize = 4_000;
+        let (content_preview, state_content) = if is_state {
+            (
+                content.chars().take(PREVIEW_CHARS).collect(),
+                Some(content.to_string()),
+            )
+        } else {
+            (content.chars().take(PREVIEW_CHARS).collect(), None)
+        };
 
         let entry = SessionEntry {
             turn: self.total_turns,
@@ -134,7 +150,8 @@ impl SessionState {
             ts: now_secs(),
             tokens,
             embedding,
-            content_preview: content.chars().take(4000).collect(),
+            content_preview,
+            state_content,
         };
 
         self.entries.push(entry);
@@ -220,12 +237,17 @@ impl SessionState {
                 sim >= DELTA_THRESHOLD
             })?;
 
-        // Re-embed each new line and compare against the prior content preview.
-        // Lines with high similarity to any sentence in the prior output are "same".
+        // Re-embed each new line and compare against the prior content.
+        // Use state_content for full comparison when available (state commands),
+        // otherwise fall back to content_preview.
         let model = ccr_core::summarizer::embed_batch(new_lines).ok()?;
 
-        // Embed lines from prior content for line-level comparison
-        let prior_lines: Vec<&str> = prior.content_preview.lines().collect();
+        let prior_text = prior
+            .state_content
+            .as_deref()
+            .unwrap_or(&prior.content_preview);
+
+        let prior_lines: Vec<&str> = prior_text.lines().collect();
         if prior_lines.is_empty() {
             return None;
         }
@@ -251,9 +273,12 @@ impl SessionState {
             }
         }
 
+        // Approximate tokens saved by the repeated lines.
+        let approx_saved = prior.tokens.saturating_mul(same_count)
+            / prior_lines.len().max(1);
         let ref_marker = format!(
-            "[{} lines same as turn {} — {} tokens saved]",
-            same_count, prior.turn, prior.tokens
+            "[Δ from turn {}: +{} new, {} repeated — ~{} tokens saved]",
+            prior.turn, new_count, same_count, approx_saved
         );
 
         let mut output_parts: Vec<String> = Vec::new();
@@ -274,6 +299,21 @@ impl SessionState {
 // ── Session-aware compression budget (C2) ────────────────────────────────────
 
 impl SessionState {
+    /// Returns context pressure in [0.0, 1.0].
+    /// 0.0 = fresh session (no extra compression needed).
+    /// 1.0 = context is critically full (maximum tightening active).
+    /// Ramps linearly from PRESSURE_START to PRESSURE_MAX cumulative output tokens.
+    pub fn context_pressure(&self) -> f32 {
+        const PRESSURE_START: usize = 25_000;
+        const PRESSURE_MAX: usize = 80_000;
+        if self.total_tokens <= PRESSURE_START {
+            return 0.0;
+        }
+        let range = (PRESSURE_MAX - PRESSURE_START) as f32;
+        let pos = self.total_tokens.saturating_sub(PRESSURE_START) as f32;
+        (pos / range).min(1.0)
+    }
+
     /// Returns a compression factor in [0.5, 1.0].
     ///
     /// At 1.0 (fresh session): no extra compression beyond the handler's own filter.

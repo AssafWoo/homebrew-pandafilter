@@ -40,7 +40,7 @@ fn make_session_with_prior(cmd: &str, prior_output: &str) -> SessionState {
     let mut session = SessionState::default();
     let emb = embed_text(prior_output);
     let tokens = ccr_core::tokens::count_tokens(prior_output);
-    session.record(cmd, emb, tokens, prior_output);
+    session.record(cmd, emb, tokens, prior_output, false);
     session
 }
 
@@ -109,8 +109,8 @@ fn repeated_lines_replaced_with_marker() {
     let delta = session.compute_delta("cargo", &new_lines, &new_emb).unwrap();
 
     assert!(
-        delta.output.contains("same as turn") || delta.output.contains("lines same"),
-        "Expected '[N lines same as turn X]' marker:\n{}",
+        delta.output.contains("Δ from turn") || delta.output.contains("same as turn") || delta.output.contains("lines same"),
+        "Expected delta marker in output:\n{}",
         delta.output
     );
 }

@@ -1,6 +1,16 @@
 use crate::config::{CommandConfig, FilterAction, SimpleAction};
 use regex::Regex;
 
+/// Build a collapse marker, optionally embedding a Zoom-In expand ID.
+fn make_collapse_marker(count: usize, original_lines: Vec<String>) -> String {
+    if crate::zoom::is_enabled() && !original_lines.is_empty() {
+        let id = crate::zoom::register(original_lines);
+        format!("[{} matching lines collapsed — ccr expand {}]", count, id)
+    } else {
+        format!("[{} matching lines collapsed]", count)
+    }
+}
+
 struct CompiledPattern {
     regex: Regex,
     action: FilterAction,
@@ -39,10 +49,11 @@ impl PatternFilter {
         let lines: Vec<&str> = input.lines().collect();
         let mut result: Vec<String> = Vec::new();
 
-        // For Collapse: track consecutive matches per pattern index
-        // We'll do a line-by-line pass tracking collapse state
+        // For Collapse: track consecutive matches per pattern index.
         let mut collapse_counts: Vec<usize> = vec![0; self.patterns.len()];
-        let mut active_collapse: Option<usize> = None; // pattern index currently collapsing
+        // Track the actual lines accumulated per collapse pattern for Zoom-In.
+        let mut collapsed_lines: Vec<Vec<String>> = vec![Vec::new(); self.patterns.len()];
+        let mut active_collapse: Option<usize> = None;
 
         for line in &lines {
             let mut matched = false;
@@ -55,10 +66,8 @@ impl PatternFilter {
                             if let Some(ci) = active_collapse {
                                 if ci != i {
                                     if collapse_counts[ci] > 0 {
-                                        result.push(format!(
-                                            "[{} matching lines collapsed]",
-                                            collapse_counts[ci]
-                                        ));
+                                        let acc = std::mem::take(&mut collapsed_lines[ci]);
+                                        result.push(make_collapse_marker(collapse_counts[ci], acc));
                                         collapse_counts[ci] = 0;
                                     }
                                     active_collapse = None;
@@ -71,25 +80,22 @@ impl PatternFilter {
                             if let Some(ci) = active_collapse {
                                 if ci != i {
                                     if collapse_counts[ci] > 0 {
-                                        result.push(format!(
-                                            "[{} matching lines collapsed]",
-                                            collapse_counts[ci]
-                                        ));
+                                        let acc = std::mem::take(&mut collapsed_lines[ci]);
+                                        result.push(make_collapse_marker(collapse_counts[ci], acc));
                                         collapse_counts[ci] = 0;
                                     }
                                 }
                             }
                             active_collapse = Some(i);
                             collapse_counts[i] += 1;
+                            collapsed_lines[i].push(line.to_string());
                         }
                         FilterAction::ReplaceWith { ReplaceWith: replacement } => {
                             // flush any active collapse
                             if let Some(ci) = active_collapse {
                                 if collapse_counts[ci] > 0 {
-                                    result.push(format!(
-                                        "[{} matching lines collapsed]",
-                                        collapse_counts[ci]
-                                    ));
+                                    let acc = std::mem::take(&mut collapsed_lines[ci]);
+                                    result.push(make_collapse_marker(collapse_counts[ci], acc));
                                     collapse_counts[ci] = 0;
                                 }
                                 active_collapse = None;
@@ -104,10 +110,8 @@ impl PatternFilter {
                 // flush any active collapse
                 if let Some(ci) = active_collapse {
                     if collapse_counts[ci] > 0 {
-                        result.push(format!(
-                            "[{} matching lines collapsed]",
-                            collapse_counts[ci]
-                        ));
+                        let acc = std::mem::take(&mut collapsed_lines[ci]);
+                        result.push(make_collapse_marker(collapse_counts[ci], acc));
                         collapse_counts[ci] = 0;
                     }
                     active_collapse = None;
@@ -119,7 +123,8 @@ impl PatternFilter {
         // flush remaining collapse
         if let Some(ci) = active_collapse {
             if collapse_counts[ci] > 0 {
-                result.push(format!("[{} matching lines collapsed]", collapse_counts[ci]));
+                let acc = std::mem::take(&mut collapsed_lines[ci]);
+                result.push(make_collapse_marker(collapse_counts[ci], acc));
             }
         }
 

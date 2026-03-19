@@ -37,6 +37,7 @@ impl Default for TeeConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub struct GlobalConfig {
     pub summarize_threshold_lines: usize,
     pub head_lines: usize,
@@ -55,10 +56,22 @@ pub struct GlobalConfig {
     /// First call wins — changing this requires restarting the process.
     #[serde(default = "default_bert_model")]
     pub bert_model: String,
+    /// Commands whose output represents persistent system state.
+    /// These get full-content storage in SessionEntry (no 4000-char cap),
+    /// enabling accurate line-level delta across long state outputs.
+    #[serde(default = "default_state_commands")]
+    pub state_commands: Vec<String>,
 }
 
 fn default_bert_model() -> String {
     "AllMiniLML6V2".to_string()
+}
+
+fn default_state_commands() -> Vec<String> {
+    ["git", "kubectl", "ps", "ls", "df", "docker"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 impl Default for GlobalConfig {
@@ -72,7 +85,33 @@ impl Default for GlobalConfig {
             deduplicate_lines: true,
             hard_keep_patterns: Vec::new(),
             bert_model: default_bert_model(),
+            state_commands: default_state_commands(),
         }
+    }
+}
+
+impl CcrConfig {
+    /// Return a copy of this config adjusted for the given context pressure.
+    /// pressure: 0.0 = no change, 1.0 = maximum tightening.
+    ///
+    /// At p=1.0:
+    ///   - summarize_threshold_lines shrinks to 25% of configured value (min 30)
+    ///   - head_lines / tail_lines shrink to 40% of configured values (min 4 each)
+    pub fn with_pressure(mut self, pressure: f32) -> Self {
+        if pressure < 0.01 {
+            return self;
+        }
+        let p = pressure.clamp(0.0, 1.0);
+        let threshold_factor = 1.0 - 0.75 * p;
+        self.global.summarize_threshold_lines = ((self.global.summarize_threshold_lines as f32
+            * threshold_factor) as usize)
+            .max(30);
+        let budget_factor = 1.0 - 0.60 * p;
+        self.global.head_lines =
+            ((self.global.head_lines as f32 * budget_factor) as usize).max(4);
+        self.global.tail_lines =
+            ((self.global.tail_lines as f32 * budget_factor) as usize).max(4);
+        self
     }
 }
 
