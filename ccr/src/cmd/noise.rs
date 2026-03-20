@@ -21,8 +21,30 @@ pub fn run(reset: bool) -> Result<()> {
 
     let store = NoiseStore::load(&key);
     if store.patterns.is_empty() {
-        println!("No noise patterns learned yet for this project.");
-        println!("Run some commands through CCR and patterns will accumulate automatically.");
+        println!("No noise patterns learned yet for project {} (cwd: {}).",
+            &key[..8.min(key.len())],
+            std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default());
+
+        // Show other projects that do have data
+        if let Some(projects_dir) = dirs::data_local_dir().map(|d| d.join("ccr").join("projects")) {
+            if let Ok(entries) = std::fs::read_dir(&projects_dir) {
+                let others: Vec<String> = entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().join("noise.json").exists())
+                    .filter_map(|e| e.file_name().into_string().ok())
+                    .filter(|k| k != &key)
+                    .collect();
+                if !others.is_empty() {
+                    println!("\nOther projects with noise data:");
+                    for k in &others {
+                        let s = NoiseStore::load(k);
+                        let promoted = s.patterns.values().filter(|p| p.promoted).count();
+                        println!("  {} — {} patterns, {} promoted", &k[..8.min(k.len())], s.patterns.len(), promoted);
+                    }
+                    println!("\nRun `ccr noise` from the relevant project directory to inspect.");
+                }
+            }
+        }
         return Ok(());
     }
 
