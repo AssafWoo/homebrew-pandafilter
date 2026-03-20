@@ -310,6 +310,11 @@ fn process_read(hook_input: HookInput) -> Result<()> {
         result.output
     };
 
+    let input_tokens = ccr_core::tokens::count_tokens(&output_text);
+    let output_tokens = ccr_core::tokens::count_tokens(&compressed);
+    let analytics = ccr_core::analytics::Analytics::new(input_tokens, output_tokens, Some("(read)".to_string()), None, None);
+    crate::util::append_analytics(&analytics);
+
     let hook_output = HookOutput { output: compressed };
     println!("{}", serde_json::to_string(&hook_output)?);
 
@@ -420,6 +425,11 @@ fn process_glob(hook_input: HookInput) -> Result<()> {
             session.save(&sid);
         }
     }
+
+    let input_tokens = ccr_core::tokens::count_tokens(&output_text);
+    let output_tokens = ccr_core::tokens::count_tokens(&compressed);
+    let analytics = ccr_core::analytics::Analytics::new(input_tokens, output_tokens, Some("(glob)".to_string()), None, None);
+    crate::util::append_analytics(&analytics);
 
     let hook_output = HookOutput { output: compressed };
     println!("{}", serde_json::to_string(&hook_output)?);
