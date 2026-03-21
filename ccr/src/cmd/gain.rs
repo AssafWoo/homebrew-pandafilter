@@ -417,6 +417,8 @@ fn print_history(records: &[Analytics], days: u32) {
 
 /// Normalize a stored command key for display:
 /// - Strip leading "rtk " wrapper (e.g. "rtk git status" → "git status")
+/// - Skip leading KEY=VALUE env var assignments (e.g. "GIT_COMMITTER_NAME=Assaf git status")
+/// - Strip "rtk " wrapper prefix
 /// - Take the basename of the first token (e.g. "/usr/bin/git status" → "git status")
 /// - Collapse tool-event labels like "(read)" and "(glob)" into "(pipeline)"
 fn normalize_cmd_key(raw: Option<&str>) -> String {
@@ -426,6 +428,19 @@ fn normalize_cmd_key(raw: Option<&str>) -> String {
     };
     // Collapse tool-event labels and bare wrapper names into (pipeline)
     if s == "(read)" || s == "(glob)" || s == "rtk" || s == "ccr" {
+        return "(pipeline)".to_string();
+    }
+    // Skip leading KEY=VALUE env var assignments
+    fn is_env_assign(t: &str) -> bool {
+        let eq = t.find('=').unwrap_or(0);
+        eq > 0 && t[..eq].chars().all(|c| c.is_ascii_uppercase() || c == '_')
+    }
+    let s: String = {
+        let iter = s.split_whitespace().skip_while(|t| is_env_assign(t));
+        iter.collect::<Vec<_>>().join(" ")
+    };
+    let s = s.as_str();
+    if s.is_empty() {
         return "(pipeline)".to_string();
     }
     // Strip "rtk " prefix

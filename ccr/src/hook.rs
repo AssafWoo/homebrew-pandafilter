@@ -63,8 +63,13 @@ fn process_bash(hook_input: HookInput) -> Result<()> {
     // If command was rewritten by a wrapper (e.g. RTK: "rtk git status"),
     // attribute analytics to the real underlying command, not the wrapper.
     // Also normalize full paths to basename: "/usr/bin/git" → "git".
+    // Skip leading KEY=VALUE env var assignments (e.g. "GIT_COMMITTER_NAME=Assaf git commit").
     let command_hint = {
-        let mut tokens = full_cmd.split_whitespace();
+        let mut tokens = full_cmd.split_whitespace()
+            .skip_while(|t| {
+                let eq = t.find('=').unwrap_or(0);
+                eq > 0 && t[..eq].chars().all(|c| c.is_ascii_uppercase() || c == '_')
+            });
         let first = tokens.next().unwrap_or("");
         let real = if first == "rtk" {
             tokens.next().unwrap_or("")
@@ -116,17 +121,24 @@ fn process_bash(hook_input: HookInput) -> Result<()> {
     let sid = crate::session::session_id();
     let mut session = crate::session::SessionState::load(&sid);
 
-    // cmd_key for session tracking: skip wrapper prefix so "rtk git status" → "git status"
-    let effective_cmd = if full_cmd.trim_start().starts_with("rtk ") {
-        full_cmd.trim_start().trim_start_matches("rtk ").trim_start()
-    } else {
-        full_cmd.trim_start()
+    // cmd_key for session tracking: skip leading KEY=VALUE env vars and wrapper prefix.
+    // "GIT_COMMITTER_NAME=Assaf git commit -m foo" → "git commit"
+    // "rtk git status" → "git status"
+    let cmd_key: String = {
+        fn is_env_assign(t: &&str) -> bool {
+            let eq = t.find('=').unwrap_or(0);
+            eq > 0 && t[..eq].chars().all(|c| c.is_ascii_uppercase() || c == '_')
+        }
+        let mut real_tokens = full_cmd.split_whitespace().skip_while(is_env_assign);
+        let first = real_tokens.next().unwrap_or("");
+        let rest: Vec<&str> = real_tokens.collect();
+        let real_iter: Box<dyn Iterator<Item = &str>> = if first == "rtk" {
+            Box::new(rest.into_iter())
+        } else {
+            Box::new(std::iter::once(first).chain(rest.into_iter()))
+        };
+        real_iter.take(2).collect::<Vec<_>>().join(" ")
     };
-    let cmd_key: String = effective_cmd
-        .split_whitespace()
-        .take(2)
-        .collect::<Vec<_>>()
-        .join(" ");
 
     let historical_centroid = session.command_centroid(&cmd_key).cloned();
 
@@ -248,10 +260,11 @@ fn process_bash(hook_input: HookInput) -> Result<()> {
     // enough and avoids a BERT dependency for analytics correctness.
     let input_tokens = ccr_core::tokens::count_tokens(&output_text);
     let output_tokens = ccr_core::tokens::count_tokens(&final_output);
-    let subcommand = effective_cmd
+    // subcommand is the second non-flag token of the real command (already in cmd_key)
+    let subcommand = cmd_key
         .split_whitespace()
-        .skip(1)
-        .find(|s| !s.starts_with('-'))
+        .nth(1)
+        .filter(|s| !s.starts_with('-'))
         .map(|s| s.to_string());
     let analytics = ccr_core::analytics::Analytics::new(
         input_tokens,

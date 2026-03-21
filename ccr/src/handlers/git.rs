@@ -12,13 +12,23 @@ const PUSH_PULL_RULES: &[util::MatchOutputRule] = &[util::MatchOutputRule {
 impl Handler for GitHandler {
     fn rewrite_args(&self, args: &[String]) -> Vec<String> {
         let subcmd = args.get(1).map(|s| s.as_str()).unwrap_or("");
-        if subcmd == "log" {
-            // Inject --oneline if not already present
-            if !args.iter().any(|a| a == "--oneline") {
-                let mut out = args.to_vec();
-                out.insert(2, "--oneline".to_string());
-                return out;
+        match subcmd {
+            "log" => {
+                if !args.iter().any(|a| a == "--oneline") {
+                    let mut out = args.to_vec();
+                    out.insert(2, "--oneline".to_string());
+                    return out;
+                }
             }
+            "status" => {
+                // Inject --porcelain so filter_status always receives XY format
+                if !args.iter().any(|a| a == "--porcelain" || a == "--short" || a == "-s") {
+                    let mut out = args.to_vec();
+                    out.insert(2, "--porcelain".to_string());
+                    return out;
+                }
+            }
+            _ => {}
         }
         args.to_vec()
     }
@@ -166,20 +176,34 @@ fn filter_log(output: &str) -> String {
 }
 
 fn filter_diff(output: &str) -> String {
+    // Keep: diff/---/+++/@@/+/- lines plus up to 2 context lines after each change block.
+    // This keeps just enough context to locate the change without the full 3-line default.
+    let lines: Vec<&str> = output.lines().collect();
     let mut out: Vec<String> = Vec::new();
-    for line in output.lines() {
-        if line.starts_with("+++")
-            || line.starts_with("---")
-            || line.starts_with("diff ")
+    let mut context_remaining: usize = 0;
+
+    for line in &lines {
+        let is_structural = line.starts_with("diff ")
             || line.starts_with("index ")
-            || line.starts_with("@@")
-            || line.starts_with('+')
-            || line.starts_with('-')
-        {
+            || line.starts_with("---")
+            || line.starts_with("+++")
+            || line.starts_with("@@");
+        let is_change = line.starts_with('+') || line.starts_with('-');
+        let is_context = line.starts_with(' ');
+
+        if is_structural || is_change {
             out.push(line.to_string());
+            if is_change {
+                context_remaining = 2; // allow up to 2 context lines after a change
+            }
+        } else if is_context && context_remaining > 0 {
+            out.push(line.to_string());
+            context_remaining -= 1;
+        } else {
+            context_remaining = 0;
         }
-        // Skip context lines (lines starting with space or empty)
     }
+
     if out.is_empty() {
         output.to_string()
     } else {
@@ -281,6 +305,33 @@ fn filter_list(output: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_rewrite_injects_porcelain() {
+        let handler = GitHandler;
+        let args: Vec<String> = vec!["git".into(), "status".into()];
+        let rewritten = handler.rewrite_args(&args);
+        assert!(rewritten.contains(&"--porcelain".to_string()), "should inject --porcelain");
+    }
+
+    #[test]
+    fn test_rewrite_no_double_porcelain() {
+        let handler = GitHandler;
+        let args: Vec<String> = vec!["git".into(), "status".into(), "--porcelain".into()];
+        let rewritten = handler.rewrite_args(&args);
+        assert_eq!(rewritten.iter().filter(|a| *a == "--porcelain").count(), 1);
+    }
+
+    #[test]
+    fn test_diff_keeps_context_lines() {
+        let output = "diff --git a/foo.rs b/foo.rs\n--- a/foo.rs\n+++ b/foo.rs\n@@ -1,5 +1,5 @@\n fn main() {\n-    old();\n+    new();\n     println!(\"done\");\n     let x = 1;\n     let y = 2;";
+        let result = filter_diff(output);
+        assert!(result.contains("+    new();"), "change lines kept");
+        assert!(result.contains("-    old();"), "change lines kept");
+        assert!(result.contains("println!"), "first context line after change kept");
+        assert!(result.contains("let x = 1"), "second context line after change kept");
+        assert!(!result.contains("let y = 2"), "third context line should be stripped");
+    }
 
     #[test]
     fn test_status_clean() {

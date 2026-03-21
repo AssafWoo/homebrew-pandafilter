@@ -44,6 +44,15 @@ static RE_RATIO_LINE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"^\s*\d+\s*/\s*\d+\s*$").unwrap()
 });
 
+// Cargo/rustc build progress lines that are never informative:
+//   "   Compiling foo v0.1.0 (/path)"
+//   "   Checking foo v0.1.0 (/path)"
+//   "    Fresh foo v0.1.0"
+// Keep: Finished, Installing, Installed, error, warning — those are meaningful.
+static RE_BUILD_PROGRESS: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^\s{2,}(Compiling|Checking|Fresh)\s+\S").unwrap()
+});
+
 /// Returns true if a line consists entirely of separator/decorator characters
 /// and is long enough (≥10 chars) to be structural rather than meaningful.
 /// Conservative: requires 100% of non-space chars to be from the separator set.
@@ -95,6 +104,11 @@ pub fn apply(input: &str) -> String {
 
         // Pure long decorator lines (e.g. 40-char lines of ─────────)
         if is_pure_decorator(t) {
+            continue;
+        }
+
+        // Cargo/rustc build progress (Compiling/Checking/Fresh — never informative)
+        if RE_BUILD_PROGRESS.is_match(t) {
             continue;
         }
 
@@ -174,6 +188,18 @@ mod tests {
         assert!(result.contains("Finished"));
         assert!(!result.contains("34%"));
         assert!(!result.contains("100% done"));
+    }
+
+    #[test]
+    fn strips_cargo_build_progress() {
+        let input = "   Compiling serde v1.0.0\n   Checking myapp v0.1.0\n    Fresh regex v1.5.0\nerror[E001]: bad\nwarning: unused\n   Finished dev [unoptimized] target(s) in 2.5s";
+        let result = apply(input);
+        assert!(!result.contains("Compiling"), "Compiling should be stripped");
+        assert!(!result.contains("Checking"), "Checking should be stripped");
+        assert!(!result.contains("Fresh"), "Fresh should be stripped");
+        assert!(result.contains("error[E001]"), "errors must pass through");
+        assert!(result.contains("warning"), "warnings must pass through");
+        assert!(result.contains("Finished"), "Finished must pass through");
     }
 
     #[test]

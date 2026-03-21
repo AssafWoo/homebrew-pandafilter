@@ -10,8 +10,10 @@
 - [Installation](#installation)
 - [Commands](#commands)
 - [Handlers](#handlers)
-- [BERT Pipeline](#bert-pipeline)
+- [Pipeline Architecture](#pipeline-architecture)
+- [BERT Routing](#bert-routing)
 - [Configuration](#configuration)
+- [User-Defined Filters](#user-defined-filters)
 - [Session Intelligence](#session-intelligence)
 - [Hook Architecture](#hook-architecture)
 - [CCR vs RTK](#ccr-vs-rtk)
@@ -41,14 +43,16 @@ After `ccr init`, **this is fully automatic** — no changes to how you use Clau
 
 **What makes CCR different from rule-based proxies:**
 
-- **38 handlers (50+ aliases)** — purpose-built filters for common dev tools (cargo, git, kubectl, gh, terraform, pytest, tsc, …)
-- **BERT semantic routing** — unknown commands fuzzy-matched to nearest handler via sentence embeddings
+- **40 handlers (50+ aliases)** — purpose-built filters for common dev tools (cargo, git, kubectl, gh, terraform, pytest, tsc, …)
+- **Global regex pre-filter** — strips progress bars, spinners, download lines, and decorators before BERT even loads
+- **BERT semantic routing** — unknown commands matched to nearest handler via sentence embeddings, with confidence tiers and margin gating
 - **Intent-aware compression** — uses Claude's last message as the BERT query so output relevant to the current task scores highest
 - **Noise learning** — learns which lines are boilerplate in your project and pre-filters them before BERT runs
 - **Pre-run cache** — git commands with identical repo state return cached output instantly
 - **Read/Glob compression** — file reads ≥50 lines and large glob listings go through BERT compression too
 - **Session dedup** — identical outputs across turns collapse to a single reference line
 - **Elastic context** — pipeline tightens automatically as the session fills up
+- **User-defined filters** — declarative TOML rules per command, no code needed
 
 ---
 
@@ -94,23 +98,48 @@ ccr gain --history --days 7
 ```
 CCR Token Savings
 ═════════════════════════════════════════════════
-  Runs:           142
-  Tokens saved:   182.2k  (77.7%)
-  Cost saved:     ~$0.547  (at $3.00/1M — Sonnet 4.6 default)
-  Today:          23 runs · 31.4k saved · 74.3%
+  Runs:           315  (avg 280ms)
+  Tokens saved:   32.9k / 71.1k  (46.3%)  ███████████░░░░░░░░░░░░░
+  Cost saved:     ~$0.099  (at $3.00/1M)
+  Today:          142 runs · 6.8k saved · 23.9%
+  Top command:    (pipeline)  65.2%  ·  25.8k saved
 
 Per-Command Breakdown
 ─────────────────────────────────────────────────────────────
-COMMAND        RUNS       SAVED   SAVINGS   AVG ms  IMPACT
+COMMAND      RUNS       SAVED   SAVINGS   AVG ms  IMPACT
 ─────────────────────────────────────────────────────────────
-cargo            45       89.2k     87.2%      420  ████████████████████
-git              31       41.1k     79.1%       82  ████████████████
-curl             12       31.2k     94.3%      210  ██████████████████
-(pipeline)       18       12.4k     42.1%        —  ████████
-(read)            8        4.1k     61.3%        —  ████
+(pipeline)    112       25.8k     65.2%       —  █████████████
+rustfmt         2        2.3k     56.8%       —  ███████████
+...
+
+Unoptimized Commands
+  Run `ccr discover` for full details · ~18.3k tokens potential
+  cargo         ~8.2k saveable
+  git           ~6.1k saveable
 ```
 
-Pricing uses `cost_per_million_tokens` from `ccr.toml` if set, otherwise `ANTHROPIC_MODEL` env var (Opus 4.6: $15, Sonnet 4.6: $3, Haiku 4.5: $0.80), otherwise $3.00.
+If unoptimized commands are detected in your Claude Code history, they appear at the bottom with estimated savings. Pricing uses `cost_per_million_tokens` from `ccr.toml` if set, otherwise `ANTHROPIC_MODEL` env var (Opus 4.6: $15, Sonnet 4.6: $3, Haiku 4.5: $0.80), otherwise $3.00.
+
+### ccr discover
+
+```bash
+ccr discover
+```
+
+Scans `~/.claude/projects/*/` JSONL history for Bash commands that ran without CCR. Reports estimated missed savings sorted by impact. Commands already measured through CCR show actual savings ratios; others use handler-specific estimates.
+
+### ccr compress
+
+```bash
+ccr compress --scan-session --dry-run   # estimate savings for current conversation
+ccr compress --scan-session             # compress and write to {file}.compressed.json
+ccr compress conversation.json -o out.json
+cat conversation.json | ccr compress -
+```
+
+Finds the most recently modified conversation JSONL under `~/.claude/projects/`, runs tiered compression (recent turns preserved verbatim, older turns compressed), and reports `tokens_in → tokens_out`.
+
+`--dry-run` estimates savings without writing output. `--scan-session` auto-locates the current conversation file. When context pressure is high, the hook suggests: `ccr compress --scan-session --dry-run`.
 
 ### ccr init
 
@@ -123,15 +152,6 @@ ccr noise           # show learned noise patterns for this project
 ccr noise --reset   # clear all patterns
 ```
 
-```
-Learned noise patterns  (project key: a1b2c3d4e5f60718)
-─────────────────────────────────────────────────────────
-COUNT  SUPPR  RATE   STATUS    PATTERN
-  24     22   91%   promoted  downloading [progress]
-  18     16   88%   learning  warning: unused import
-  12     11   91%   promoted  compiling package v
-```
-
 Lines seen ≥10 times with ≥90% suppression rate are promoted to permanent pre-filters. Error/warning/panic lines are never promoted.
 
 ### ccr expand
@@ -141,10 +161,7 @@ ccr expand ZI_3       # print original lines from a collapsed block
 ccr expand --list     # list all available IDs in this session
 ```
 
-When CCR collapses output, it embeds an ID in the marker:
-```
-[5 lines collapsed — ccr expand ZI_3]
-```
+When CCR collapses output, it embeds an ID: `[5 lines collapsed — ccr expand ZI_3]`
 
 ### ccr update
 
@@ -152,51 +169,26 @@ When CCR collapses output, it embeds an ID in the marker:
 ccr update
 ```
 
-Checks the latest release on GitHub and replaces the binary in-place if a newer version is available. Also re-runs `ccr init` to refresh hooks with the new binary path.
+Checks the latest release on GitHub and replaces the binary in-place if a newer version is available. Also re-runs `ccr init`.
 
-```
-Checking for updates (current: v0.5.3)...
-Update available: v0.5.3 → v0.5.4
-Downloading ccr-macos-arm64...
-Updated to v0.5.4.
-Re-registering hooks...
-Done.
-
-Checking for updates (current: v0.5.4)...
-Already up to date (v0.5.4).
-```
-
-### ccr discover
-
-Scans `~/.claude/projects/*/` JSONL history for Bash commands that ran without CCR. Reports estimated missed savings.
-
-### ccr filter
+### ccr filter / ccr run / ccr proxy
 
 ```bash
 cargo clippy 2>&1 | ccr filter --command cargo
-cat big-log-file.txt | ccr filter
-```
-
-Reads stdin, runs the pipeline, writes to stdout. Useful outside of Claude Code.
-
-### ccr run / ccr proxy
-
-```bash
 ccr run git status    # run through CCR handler
 ccr proxy git status  # run raw (no filtering), record analytics baseline
 ```
-
-When savings exceed 60%, the raw output is saved to `~/.local/share/ccr/tee/<ts>_<cmd>.log` and the path is appended to Claude's output so it can recover the full content.
 
 ---
 
 ## Handlers
 
-38 handlers (50+ command aliases) in `ccr/src/handlers/`. Lookup cascade:
+40 handlers (50+ command aliases) in `ccr/src/handlers/`. Lookup cascade:
 
-1. **Exact match** — direct command name
-2. **Static alias table** — versioned binaries, wrappers, common aliases
-3. **BERT similarity** — unknown commands matched to nearest handler (threshold 0.55)
+1. **Level 0 — User filters** — `.ccr/filters.toml` or `~/.config/ccr/filters.toml` (overrides built-in)
+2. **Level 1 — Exact match** — direct command name
+3. **Level 2 — Static alias table** — versioned binaries, wrappers, common aliases
+4. **Level 3 — BERT routing** — unknown commands matched with confidence tiers (see [BERT Routing](#bert-routing))
 
 **TypeScript / JavaScript**
 
@@ -206,28 +198,28 @@ When savings exceed 60%, the raw output is saved to `~/.local/share/ccr/tee/<ts>
 | **vitest** | `vitest` | ~88% | FAIL blocks + summary; drops `✓` lines. |
 | **jest** | `jest`, `bun`, `deno`, `nx` | ~88% | `●` failure blocks + summary; drops `PASS` lines. |
 | **eslint** | `eslint` | ~85% | Errors grouped by file, caps at 20 + `[+N more]`. |
-| **next** | `next` | ~90% | `build`: route table collapsed, errors + page count. `dev`: errors + ready line. `lint`: ESLint-style. |
+| **next** | `next` | ~90% | `build`: route table collapsed, errors + page count. `dev`: errors + ready line. |
 | **playwright** | `playwright` | ~88% | Failing test names + error messages; passing tests dropped. |
-| **prettier** | `prettier` | ~80% | `--check`: files needing formatting + count. `--write`: file count. Mode auto-inferred. |
+| **prettier** | `prettier` | ~80% | `--check`: files needing formatting + count. `--write`: file count. |
 
 **Python**
 
 | Handler | Keys | Savings | Key behavior |
 |---------|------|---------|-------------|
 | **pytest** | `pytest`, `py.test` | ~87% | FAILED node IDs + AssertionError + short summary. |
-| **pip** | `pip`, `pip3`, `uv`, `poetry`, `pdm`, `conda` | ~80% | `install`: `[complete — N packages]`. |
+| **pip** | `pip`, `pip3`, `uv`, `poetry`, `pdm`, `conda` | ~80% | `install`: `[complete — N packages]` or already-satisfied short-circuit. |
 | **python** | `python`, `python3`, `python3.X` | ~60% | Traceback: keep block + final error. Long output: BERT. |
 
 **DevOps / Cloud**
 
 | Handler | Keys | Savings | Key behavior |
 |---------|------|---------|-------------|
-| **kubectl** | `kubectl`, `k`, `minikube`, `kind` | ~85% | `get`: compact table. `logs`: BERT anomaly. `describe`: key sections. |
-| **gh** | `gh` | ~90% | `pr list`/`issue list`: compact tables. `pr checks`: pass/fail counts. |
-| **terraform** | `terraform`, `tofu` | ~88% | `plan`: `+`/`-`/`~` + summary. `apply`: resource lines + completion. |
-| **aws** | `aws`, `gcloud`, `az` | ~85% | JSON → schema. `s3 ls`: grouped by prefix. |
-| **make** | `make`, `gmake`, `ninja` | ~75% | Drops directory noise. Keeps errors + recipe failures. |
-| **go** | `go` | ~82% | `build`/`vet`: errors only. `test`: FAIL blocks. |
+| **kubectl** | `kubectl`, `k`, `minikube`, `kind` | ~85% | `get`: smart column selection (NAME+STATUS+READY, drops AGE/RESTARTS). `logs`: BERT anomaly. `describe`: key sections. |
+| **gh** | `gh` | ~90% | `pr list`/`issue list`: compact tables. `pr view`: strips HTML noise. Passthrough for `--json`/`--jq`. |
+| **terraform** | `terraform`, `tofu` | ~88% | `plan`: `+`/`-`/`~` + summary. `validate`: short-circuits on success. |
+| **aws** | `aws`, `gcloud`, `az` | ~85% | Action-specific resource extraction (ec2, lambda, iam, s3api). JSON → schema fallback. |
+| **make** | `make`, `gmake`, `ninja` | ~75% | "Nothing to be done" short-circuit. Keeps errors + recipe failures. |
+| **go** | `go` | ~82% | `build`/`vet`: errors only. `test`: FAIL blocks + `[N tests passed]` summary. Drops `=== RUN`/`--- PASS`/`coverage:` lines. |
 | **golangci-lint** | `golangci-lint`, `golangci_lint` | ~88% | Diagnostics grouped by file; INFO/DEBUG runner noise dropped. |
 | **prisma** | `prisma` | ~85% | `generate`: client summary. `migrate`: migration names. `db push`: sync status. |
 | **mvn** | `mvn`, `mvnw`, `./mvnw` | ~80% | Drops `[INFO]` noise; keeps errors + reactor summary. |
@@ -238,66 +230,93 @@ When savings exceed 60%, the raw output is saved to `~/.local/share/ccr/tee/<ts>
 
 | Handler | Keys | Savings | Key behavior |
 |---------|------|---------|-------------|
-| **cargo** | `cargo` | ~87% | `build`/`check`/`clippy`: JSON format, errors + warning count. `test`: failures + summary. |
-| **git** | `git` | ~80% | `status` caps 20 files. `log` injects `--oneline`, caps 20. `diff`: `+`/`-`/`@@` only. |
-| **curl** | `curl` | ~96% | JSON → type schema. Arrays: first-element schema + `[N items]`. |
-| **docker** | `docker`, `docker-compose` | ~85% | `logs`: BERT anomaly. `ps`/`images`: compact table. |
-| **npm/yarn** | `npm`, `yarn` | ~85% | `install`: package count. `test`: failures + summary. |
-| **pnpm** | `pnpm`, `pnpx` | ~87% | `install`: `Packages:` + `Progress:` summary; drops progress bars. `run`/`exec`: errors + tail. |
-| **clippy** | `clippy`, `cargo-clippy` | ~85% | Rustc-style diagnostics filtered; span lines dropped; duplicate warnings collapsed. |
+| **cargo** | `cargo` | ~87% | `build`/`check`/`clippy`: JSON format, errors + warning count. `test`: failures + summary. Repeated Clippy rules grouped `[rule ×N]`. |
+| **git** | `git` | ~80% | `status`: Staged/Modified/Untracked counts. `log` injects `--oneline`, caps 20. `diff`: hunk limiting (max 5 + `[+N more hunks]`). Push/pull success short-circuits. |
+| **curl** | `curl` | ~96% | JSON → type schema. Non-JSON: cap 30 lines. |
+| **docker** | `docker`, `docker-compose` | ~85% | `logs`: ANSI strip + timestamp normalization before BERT. `ps`/`images`: compact table. |
+| **npm/yarn** | `npm`, `yarn` | ~85% | `install`: package count. Strips boilerplate (`> project@...`, `npm WARN`, spinners). |
+| **pnpm** | `pnpm`, `pnpx` | ~87% | `install`: summary; drops progress bars. `run`/`exec`: errors + tail. |
+| **clippy** | `clippy`, `cargo-clippy` | ~85% | Rustc-style diagnostics filtered; duplicate warnings collapsed. |
 | **journalctl** | `journalctl` | ~80% | Injects `--no-pager -n 200`. BERT anomaly scoring. |
-| **psql** | `psql`, `pgcli` | ~88% | Strips borders, caps at 20 rows + `[+N more]`. |
+| **psql** | `psql`, `pgcli` | ~88% | Strips borders, pipe-separated columns, caps at 20 rows. |
 | **brew** | `brew` | ~75% | `install`/`update`: status lines + Caveats. |
-| **tree** | `tree` | ~70% | ≤30 lines pass through. >30: first 25 + summary. |
-| **diff** | `diff` | ~75% | `+`/`-`/`@@`/header lines only. |
+| **tree** | `tree` | ~70% | Injects `-I "node_modules\|.git\|target\|..."` unless user set `-I`. |
+| **diff** | `diff` | ~75% | `+`/`-`/`@@` + 2 context lines per hunk. Max 5 hunks + `[+N more hunks]`. |
 | **jq** | `jq` | ~80% | ≤20 lines pass through. Array: schema of first element + `[N items]`. |
-| **env** | `env`, `printenv` | ~70% | Masks secrets, sorted, capped at 40. |
-| **ls** | `ls` | ~80% | Dirs first, alphabetical, limit 40 + summary. |
+| **env** | `env`, `printenv` | ~70% | Categorized sections: [PATH]/[Language]/[Cloud]/[Tools]/[Other]. Sensitive values redacted. |
+| **ls** | `ls` | ~80% | Drops noise dirs (node_modules, .git, target, …). Top-3 extension summary. |
 | **cat** | `cat` | ~70% | ≤100 lines: pass through. 101–500: head/tail. >500: BERT. |
-| **grep / rg** | `grep`, `rg` | ~80% | Groups by file, truncates lines, caps at 50 matches. |
+| **grep / rg** | `grep`, `rg` | ~80% | Compact paths (>50 chars), per-file 25-match cap. |
 | **find** | `find` | ~78% | Strips common prefix, groups by directory, caps at 50. |
+| **json** | `json` | ~70% | Parses output as JSON, returns depth-limited type schema if smaller. |
+| **log** | `log` | ~75% | Timestamp/UUID/hex normalization, dedup `[×N]`, error/warning summary block. |
 
 ---
 
-## BERT Pipeline
+## Pipeline Architecture
 
-CCR uses [`all-MiniLM-L6-v2`](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) (384-dim sentence embeddings, ~90 MB, downloaded once on first use via `fastembed`). Every line of output is embedded and scored; only the most informative lines are kept.
-
-### Scoring
-
-Base score: `1 - cosine_similarity(line_embedding, centroid)` — outliers score high, repetitive boilerplate scores low. Lines matching error/warning/panic patterns are **hard-kept** regardless of score.
-
-The score is blended with a query when context is available:
+Every output goes through these steps in order:
 
 ```
-final_score = 0.5 × anomaly_score + 0.5 × cosine_similarity(line, query_embedding)
+1. Strip ANSI codes
+2. Normalize whitespace (trailing spaces, blank-line collapse, consecutive-line dedup)
+2.5 ── Global regex pre-filter (NEW, zero BERT cost, always runs) ──────────────────
+        • Strip progress bars: [=======>   ], [####  56%], bare ====== (8+ chars)
+        • Strip download/transfer lines: "Downloading 45 MB", "Fetching index..."
+        • Strip spinner lines: ⠙⠹⠸ / - \ |
+        • Strip standalone percentage lines: "34%", "100% done"
+        • Strip pure decorator lines ≥10 chars: ─────────, ═════════
+3. Command-specific pattern filter (regex rules from config/handlers)
+4. ── Only if over summarize_threshold_lines ─────────────────────────────────────
+   4a. BERT noise pre-filter (semantic: removes boilerplate via embedding distance)
+   4b. Entropy-adaptive BERT summarization (7 passes, see below)
 ```
 
-The query comes from Claude's last assistant message (intent extraction) — so lines relevant to what Claude is currently working on rank higher than generic outliers.
+**Minimum token gate (hook level):** Outputs under 15 tokens (`which`, `mkdir`, `wc`, `source`) skip the entire pipeline — no BERT, no analytics recording. This keeps efficiency metrics clean and avoids latency overhead on trivial outputs.
 
-### Passes
-
-All seven passes run in sequence on every compressed output:
+### BERT Passes (step 4b)
 
 | Pass | What it does |
 |------|-------------|
-| **Noise pre-filter** | Removes project-specific boilerplate promoted by noise learning, before BERT runs |
-| **Semantic clustering** | Near-identical lines (cosine > 0.85) collapse to one representative + `[N similar]` |
-| **Entropy budget** | Samples embeddings to measure output diversity; uniform output (progress bars, install logs) gets a tight token budget automatically |
-| **Anomaly scoring** | Scores each line against the centroid + intent query; keeps top-N by score |
-| **Contextual anchors** | After selection, re-adds the nearest semantic neighbors of each kept line (e.g. the function signature above an error) |
-| **Historical centroid** | Scores anomaly against a rolling mean of prior runs of the same command — genuinely new output stands out more than first-run spikes |
-| **Delta compression** | Compares against previous run of same command; suppresses unchanged lines, surfaces new ones with `[Δ from turn N: +M new, K repeated]` |
+| **Noise pre-filter** | Removes project-specific boilerplate promoted by noise learning |
+| **Semantic clustering** | Near-identical lines (cosine > 0.85) collapse to one representative |
+| **Entropy budget** | Diverse content gets more lines; uniform output gets a tight budget |
+| **Anomaly scoring** | Scores each line against centroid + intent query; keeps top-N |
+| **Contextual anchors** | Re-adds semantic neighbors of kept lines (e.g. function signature above error) |
+| **Historical centroid** | Scores against rolling mean of prior runs — new output stands out more |
+| **Delta compression** | Suppresses unchanged lines vs previous run; surfaces new ones with `[Δ from turn N]` |
 
 ### Fallback
 
-If the model is unavailable or output is short (< `summarize_threshold_lines`), CCR falls back to head + tail. No crash, no empty output.
+If BERT is unavailable or output is short, CCR falls back to head + tail. No crash, no empty output.
+
+---
+
+## BERT Routing
+
+Unknown commands (not in the exact/alias table) are matched to the nearest handler via sentence embeddings. **Three confidence tiers:**
+
+| Tier | Condition | Action |
+|------|-----------|--------|
+| **HIGH** | score ≥ 0.70 AND margin ≥ 0.15 | Full handler — filter output + rewrite args |
+| **MEDIUM** | score ≥ 0.55 AND margin ≥ 0.08 | Filter only — no arg injection (safe) |
+| **None** | below thresholds | Passthrough — don't risk misrouting |
+
+**Margin gate:** If `top_score - second_score < threshold`, routing is ambiguous and CCR falls back rather than guessing. A command scoring 0.71 for cargo and 0.69 for npm would route to nothing (0.02 margin < 0.08).
+
+**Subcommand hint boost (+0.08):** When an unknown command is run with a recognizable subcommand, matching handlers get a boost:
+- `bloop test` → pytest/jest/vitest/go boosted
+- `mytool build` → cargo/go/docker/next boosted
+- `newtool install` → npm/pnpm/brew/pip boosted
+- `x lint` → eslint/golangci-lint/clippy boosted
+
+This makes BERT routing reliable for unknown wrappers that follow standard subcommand conventions.
 
 ---
 
 ## Configuration
 
-Config is loaded from the first file found: `./ccr.toml` → `~/.config/ccr/config.toml` → embedded default.
+Config is loaded from: `./ccr.toml` → `~/.config/ccr/config.toml` → embedded default.
 
 ```toml
 [global]
@@ -317,7 +336,6 @@ max_files = 20
 [commands.git]
 patterns = [
   { regex = "^(Counting|Compressing|Receiving|Resolving) objects:.*", action = "Remove" },
-  { regex = "^remote: (Counting|Compressing|Enumerating).*", action = "Remove" },
 ]
 
 [commands.cargo]
@@ -329,7 +347,31 @@ patterns = [
 
 Pattern actions: `Remove` (delete line), `Collapse` (count → `[N lines collapsed]`), `ReplaceWith = "text"`.
 
-To add a custom handler, implement the `Handler` trait and register it in `ccr/src/handlers/mod.rs`.
+---
+
+## User-Defined Filters
+
+Place a `filters.toml` at `.ccr/filters.toml` (project-local) or `~/.config/ccr/filters.toml` (global). Project-local overrides global for the same command key. These run at **Level 0** — before any built-in handler.
+
+```toml
+[commands.myapp]
+strip_lines_matching = ["DEBUG:", "TRACE:"]
+keep_lines_matching  = []          # empty = keep all survivors
+max_lines = 50
+on_empty  = "(no relevant output)"
+
+[commands.myapp.match_output]
+pattern        = "Server started"
+message        = "ok — server ready"
+unless_pattern = "error"           # optional: block short-circuit if this also matches
+```
+
+Fields:
+- **`strip_lines_matching`** — remove any line containing these substrings
+- **`keep_lines_matching`** — after stripping, keep only lines matching these (empty = keep all)
+- **`max_lines`** — hard cap on output line count
+- **`on_empty`** — output when all lines are filtered away
+- **`match_output`** — short-circuit: if `pattern` found and `unless_pattern` absent, return `message` immediately (no further filtering)
 
 ---
 
@@ -337,17 +379,15 @@ To add a custom handler, implement the `Handler` trait and register it in `ccr/s
 
 CCR tracks state across turns within a session (identified by `CCR_SESSION_ID=$PPID`). State lives at `~/.local/share/ccr/sessions/<id>.json`.
 
-**Cross-turn output cache** — Identical outputs (cosine > 0.92) across turns are collapsed to `[same output as turn 4 (3m ago) — 1.2k tokens saved]`.
+**Cross-turn output cache** — Identical outputs (cosine > 0.92) across turns collapse to `[same output as turn 4 (3m ago) — 1.2k tokens saved]`.
 
 **Semantic delta** — Repeated commands emit only new/changed lines: `[Δ from turn N: +M new, K repeated — ~T tokens saved]`. Subcommand-aware so `git status` and `git log` histories don't cross-contaminate.
 
-**Elastic context** — As cumulative session tokens grow (25k → 80k), pipeline pressure scales 0 → 1, shrinking BERT budgets automatically. At >80% pressure a warning is appended.
+**Elastic context** — As cumulative session tokens grow (25k → 80k), pipeline pressure scales 0 → 1, shrinking BERT budgets automatically. At >80% pressure: `[⚠ context near full — run ccr compress --scan-session --dry-run to estimate savings]`.
 
 **Pre-run cache** — git commands with identical HEAD+staged+unstaged state are served from cache (TTL 1h), skipping execution entirely.
 
 **Intent-aware query** — Reads Claude's last assistant message from the live session JSONL and uses it as the BERT query, biasing compression toward what Claude is currently working on.
-
-**Conversation compression** (ccr-sdk) — Tiered compression of old conversation turns: most-recent verbatim → tier 1 extractive (55%) → tier 2 generative via Ollama or extractive (20%). Compounding ~10–20% savings per turn across a long session.
 
 ---
 
@@ -359,14 +399,14 @@ CCR tracks state across turns within a session (identified by `CCR_SESSION_ID=$P
 
 - **Known handler** → rewrites to `ccr run <cmd>`, patches `tool_input.command`
 - **Unknown** → exits 1, Claude Code uses original command
-- **Compound commands** → each segment rewritten independently (`cargo build && git push` → `ccr run cargo build && ccr run git push`)
+- **Compound commands** → each segment rewritten independently
 - **Already wrapped** → no double-wrap
 
 ### PostToolUse
 
 Dispatches by `tool_name` — Bash, Read, or Glob:
 
-- **Bash** — noise pre-filter → EC pressure → IX intent query → BERT pipeline → ZI blocks → delta compression → sentence dedup → session cache → analytics
+- **Bash** — min-token gate → noise pre-filter → global regex rules → EC pressure → IX intent query → BERT pipeline → ZI blocks → delta compression → sentence dedup → session cache → analytics
 - **Read** — files < 50 lines pass through; larger files go through BERT pipeline with intent query; session dedup by file path
 - **Glob** — results ≤ 20 pass through; larger lists grouped by directory (max 60), session dedup by path-list hash
 
@@ -378,8 +418,11 @@ Never fails — returns nothing on error so Claude Code always sees a result.
 
 | Feature | CCR | RTK |
 |---------|-----|-----|
-| Handler count | **31 (40+ aliases)** | 40+ |
-| Unknown commands | BERT routing + fallback (~40%) | Pass through (0%) |
+| Handler count | **40 (50+ aliases)** | 40+ |
+| Global regex pre-filter | **Yes** (progress bars, spinners, decorators, download lines) | Partial |
+| Minimum token gate | **Yes** (skip pipeline for <15-token outputs) | No |
+| Unknown commands | **BERT routing + confidence tiers** (~40%) | Passthrough (0%) |
+| BERT routing confidence | **Tier system + margin gate + subcommand hints** | N/A |
 | Handler routing | Exact → alias → BERT similarity | Exact match only |
 | Read tool compression | Yes (BERT pipeline ≥50 lines) | — |
 | Glob tool compression | Yes (dir grouping + session dedup) | — |
@@ -388,6 +431,8 @@ Never fails — returns nothing on error so Claude Code always sees a result.
 | Pre-run structural cache | Yes (git by HEAD+staged+unstaged) | — |
 | Cross-turn output cache | Yes (cosine > 0.92) | — |
 | Elastic context | Yes (scales with session size) | — |
+| User-defined TOML filters | Yes (Level 0, project + global) | — |
+| Missed savings surfaced | Yes (ccr gain + ccr discover) | — |
 | Conversation compression | ccr-sdk: tiered + Ollama + dedup | — |
 | Hooks preserved on init | Yes (merges arrays) | Overwrites |
 
@@ -397,7 +442,7 @@ Never fails — returns nothing on error so Claude Code always sees a result.
 
 ```
 ccr/            CLI binary — handlers, hooks, session state, commands
-ccr-core/       Core library (no I/O) — pipeline, BERT summarizer, config, analytics
+ccr-core/       Core library (no I/O) — pipeline, BERT summarizer, global rules, config, analytics
 ccr-sdk/        Conversation compression — tiered compressor, deduplicator, Ollama
 ccr-eval/       Evaluation suite — Q&A + conversation fixtures against Claude API
 config/         Embedded default filter patterns (git, cargo, npm, docker)

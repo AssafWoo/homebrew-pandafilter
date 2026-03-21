@@ -97,8 +97,8 @@ mod tests {
     #[test]
     fn known_command_rewritten() {
         let result = rewrite_command("git status");
-        // git status has no flag injection; wrapped as-is
-        assert_eq!(result, Some("ccr run git status".to_string()));
+        // git status gets --porcelain injected via rewrite_args
+        assert_eq!(result, Some("ccr run git status --porcelain".to_string()));
     }
 
     #[test]
@@ -143,9 +143,9 @@ mod tests {
 
     #[test]
     fn compound_mixed() {
-        // Only known commands get wrapped
+        // Only known commands get wrapped; git status gets --porcelain injected
         let result = rewrite_command("some-tool && git status");
-        assert_eq!(result, Some("some-tool && ccr run git status".to_string()));
+        assert_eq!(result, Some("some-tool && ccr run git status --porcelain".to_string()));
     }
 
     #[test]
