@@ -99,7 +99,13 @@ fn print_summary(records: &[Analytics]) {
 
     // ── Header ──
     let total_exec_ms: u64 = records.iter().filter_map(|r| r.duration_ms).sum();
-    let efficiency_bar = {
+    let timed_runs = records.iter().filter(|r| r.duration_ms.is_some()).count();
+    let avg_ms: Option<u64> = if timed_runs > 0 {
+        Some(total_exec_ms / timed_runs as u64)
+    } else {
+        None
+    };
+    let savings_bar = {
         let filled = ((overall_pct / 100.0) * 24.0) as usize;
         let empty = 24usize.saturating_sub(filled);
         format!("{}{}", "█".repeat(filled), "░".repeat(empty))
@@ -107,33 +113,32 @@ fn print_summary(records: &[Analytics]) {
 
     println!("{}", "CCR Token Savings".if_supports_color(Stdout, |t| t.bold()));
     println!("{}", "═".repeat(49).if_supports_color(Stdout, |t| t.dimmed()));
-    println!("  Runs:           {}", records.len());
     let green_bold = Style::new().bold().green();
     let yellow_bold = Style::new().bold().yellow();
+
+    // "Runs: 206  (avg 87ms)"
+    let runs_suffix = avg_ms
+        .map(|ms| format!("  (avg {}ms)", ms))
+        .unwrap_or_default();
     println!(
-        "  Input tokens:   {}",
-        fmt_tokens(total_input).if_supports_color(Stdout, |t| t.dimmed()),
+        "  Runs:           {}{}",
+        records.len(),
+        runs_suffix.if_supports_color(Stdout, |t| t.dimmed()),
     );
+
+    // "Tokens saved: 27.3k / 46.7k  (54.4%)  ████████░░░░░░"
     println!(
-        "  Tokens saved:   {}  ({})",
+        "  Tokens saved:   {} / {}  ({})  {}",
         fmt_tokens(total_saved).if_supports_color(Stdout, |t| t.style(green_bold)),
+        fmt_tokens(total_input).if_supports_color(Stdout, |t| t.dimmed()),
         format!("{:.1}%", overall_pct).if_supports_color(Stdout, |t| t.green()),
+        savings_bar.if_supports_color(Stdout, |t| t.green()),
     );
+
     println!(
-        "  Cost saved:     {}  (at {})",
+        "  Cost saved:     {}  {}",
         format!("~{}", fmt_cost(cost_saved)).if_supports_color(Stdout, |t| t.style(yellow_bold)),
-        price_label.if_supports_color(Stdout, |t| t.dimmed()),
-    );
-    if total_exec_ms > 0 {
-        println!(
-            "  Exec time:      {}",
-            fmt_duration(total_exec_ms).if_supports_color(Stdout, |t| t.dimmed()),
-        );
-    }
-    println!(
-        "  Efficiency:     {} {}",
-        efficiency_bar.if_supports_color(Stdout, |t| t.green()),
-        format!("{:.1}%", overall_pct).if_supports_color(Stdout, |t| t.green()),
+        format!("(at {})", price_label).if_supports_color(Stdout, |t| t.dimmed()),
     );
 
     if !today.is_empty() {
@@ -157,6 +162,30 @@ fn print_summary(records: &[Analytics]) {
             fmt_tokens(w_saved).if_supports_color(Stdout, |t| t.cyan()),
             format!("{:.1}%", savings_pct(w_in, w_out)).if_supports_color(Stdout, |t| t.cyan()),
         );
+    }
+
+    // ── Top command ──
+    if !records.is_empty() {
+        let mut top_by_cmd: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+        for r in records {
+            let key = normalize_cmd_key(r.command.as_deref());
+            let e = top_by_cmd.entry(key).or_default();
+            e.0 += r.input_tokens;
+            e.1 += r.output_tokens;
+        }
+        if let Some((top_cmd, (top_in, top_out))) = top_by_cmd
+            .into_iter()
+            .max_by_key(|(_, (i, o))| i.saturating_sub(*o))
+        {
+            let top_saved = top_in.saturating_sub(top_out);
+            let top_pct = savings_pct(top_in, top_out);
+            println!(
+                "  Top command:    {}  {}  ·  {} saved",
+                top_cmd.if_supports_color(Stdout, |t| t.bold()),
+                format!("{:.1}%", top_pct).if_supports_color(Stdout, |t| t.green()),
+                fmt_tokens(top_saved).if_supports_color(Stdout, |t| t.green()),
+            );
+        }
     }
 
     if records.is_empty() {
