@@ -146,7 +146,7 @@ fn print_summary(records: &[Analytics]) {
     let mut by_cmd: BTreeMap<String, CmdStats> = BTreeMap::new();
 
     for r in records {
-        let key = r.command.clone().unwrap_or_else(|| "(pipeline)".to_string());
+        let key = normalize_cmd_key(r.command.as_deref());
         let entry = by_cmd.entry(key).or_default();
         entry.input += r.input_tokens;
         entry.output += r.output_tokens;
@@ -285,7 +285,7 @@ fn print_history(records: &[Analytics], days: u32) {
     // Top commands over the period
     let mut cmd_stats: BTreeMap<String, CmdStats> = BTreeMap::new();
     for r in records.iter().filter(|r| r.timestamp_secs >= cutoff) {
-        let key = r.command.clone().unwrap_or_else(|| "(pipeline)".to_string());
+        let key = normalize_cmd_key(r.command.as_deref());
         let e = cmd_stats.entry(key).or_default();
         e.input += r.input_tokens;
         e.output += r.output_tokens;
@@ -313,6 +313,36 @@ fn print_history(records: &[Analytics], days: u32) {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Normalize a stored command key for display:
+/// - Strip leading "rtk " wrapper (e.g. "rtk git status" → "git status")
+/// - Take the basename of the first token (e.g. "/usr/bin/git status" → "git status")
+/// - Collapse tool-event labels like "(read)" and "(glob)" into "(pipeline)"
+fn normalize_cmd_key(raw: Option<&str>) -> String {
+    let s = match raw {
+        None => return "(pipeline)".to_string(),
+        Some(s) => s,
+    };
+    // Collapse tool-event labels and bare wrapper names into (pipeline)
+    if s == "(read)" || s == "(glob)" || s == "rtk" || s == "ccr" {
+        return "(pipeline)".to_string();
+    }
+    // Strip "rtk " prefix
+    let s = s.strip_prefix("rtk ").unwrap_or(s);
+    // Normalize basename of the first token
+    let mut tokens = s.splitn(2, ' ');
+    let first = tokens.next().unwrap_or(s);
+    let rest = tokens.next().unwrap_or("");
+    let basename = std::path::Path::new(first)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(first);
+    if rest.is_empty() {
+        basename.to_string()
+    } else {
+        format!("{} {}", basename, rest)
+    }
+}
 
 #[derive(Default)]
 struct CmdStats {
