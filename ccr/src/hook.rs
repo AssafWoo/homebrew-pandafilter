@@ -62,14 +62,21 @@ fn process_bash(hook_input: HookInput) -> Result<()> {
 
     // If command was rewritten by a wrapper (e.g. RTK: "rtk git status"),
     // attribute analytics to the real underlying command, not the wrapper.
+    // Also normalize full paths to basename: "/usr/bin/git" → "git".
     let command_hint = {
         let mut tokens = full_cmd.split_whitespace();
         let first = tokens.next().unwrap_or("");
-        if first == "rtk" {
-            tokens.next().map(|s| s.to_string())
+        let real = if first == "rtk" {
+            tokens.next().unwrap_or("")
         } else {
-            Some(first.to_string())
-        }
+            first
+        };
+        // Basename: strip path prefix so "/usr/bin/git" and "~/.cargo/bin/git" → "git"
+        let basename = std::path::Path::new(real)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(real);
+        if basename.is_empty() { None } else { Some(basename.to_string()) }
     };
 
     let output_text = if let Some(err) = &hook_input.tool_response.error {
