@@ -17,6 +17,8 @@ struct ToolResponse {
     #[serde(default)]
     output: String,
     #[serde(default)]
+    stdout: String,
+    #[serde(default)]
     error: Option<String>,
 }
 
@@ -65,8 +67,10 @@ fn process_bash(hook_input: HookInput) -> Result<()> {
 
     let output_text = if let Some(err) = &hook_input.tool_response.error {
         err.clone()
-    } else {
+    } else if !hook_input.tool_response.output.is_empty() {
         hook_input.tool_response.output.clone()
+    } else {
+        hook_input.tool_response.stdout.clone()
     };
 
     if output_text.is_empty() {
@@ -236,7 +240,11 @@ fn process_read(hook_input: HookInput) -> Result<()> {
         .unwrap_or("")
         .to_string();
 
-    let output_text = hook_input.tool_response.output.clone();
+    let output_text = if !hook_input.tool_response.output.is_empty() {
+        hook_input.tool_response.output.clone()
+    } else {
+        hook_input.tool_response.stdout.clone()
+    };
 
     if output_text.is_empty() {
         return Ok(());
@@ -335,7 +343,11 @@ fn process_glob(hook_input: HookInput) -> Result<()> {
         .unwrap_or("")
         .to_string();
 
-    let output_text = hook_input.tool_response.output.clone();
+    let output_text = if !hook_input.tool_response.output.is_empty() {
+        hook_input.tool_response.output.clone()
+    } else {
+        hook_input.tool_response.stdout.clone()
+    };
 
     if output_text.is_empty() {
         return Ok(());
