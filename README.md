@@ -12,19 +12,39 @@ Numbers from `ccr/tests/handler_benchmarks.rs` — each handler fed a realistic 
 |-----------|------------:|---------:|:-------:|
 | `cargo build` | 1,923 | 93 | **−95%** |
 | `cargo test` | 2,782 | 174 | **−94%** |
+| `pip install` | 1,787 | 9 | **−99%** |
+| `playwright test` | 1,367 | 19 | **−99%** |
+| `go test` | 4,507 | 148 | **−97%** |
+| `pytest` | 3,818 | 162 | **−96%** |
+| `terraform plan` | 3,926 | 163 | **−96%** |
+| `npm install` | 648 | 25 | **−96%** |
+| `cargo clippy` | 786 | 93 | **−88%** |
+| `make` | 545 | 72 | **−87%** |
+| `vitest` | 625 | 103 | **−84%** |
 | `ls` | 691 | 102 | **−85%** |
+| `next build` | 549 | 53 | **−90%** |
 | `git log` | 1,573 | 353 | **−78%** |
+| `grep` | 2,925 | 691 | **−76%** |
+| `docker ps` | 1,057 | 266 | **−75%** |
 | `git status` | 650 | 184 | **−72%** |
+| `kubectl get pods` | 2,306 | 689 | **−70%** |
 | `jest` | 330 | 114 | −65% |
+| `env` | 1,155 | 419 | −64% |
+| `brew install` | 368 | 148 | −60% |
+| `gh pr list` | 774 | 321 | −59% |
+| `mvn install` | 1,768 | 953 | −46% |
 | `git push` | 173 | 106 | −39% |
+| `golangci-lint` | 853 | 596 | −30% |
 | `tsc` | 666 | 509 | −24% |
 | `git diff` | 1,757 | 1,368 | −22% |
-| **Total** | **10,545** | **3,003** | **−72%** |
+| `gradle build` | 803 | 692 | −14% |
+| `helm install` | 224 | 54 | −76% |
+| **Total** | **41,626** | **8,969** | **−78%** |
 
 **Notes:**
-- For `cargo build` / `cargo test`: "without CCR" is the standard human-readable output; CCR injects `--message-format json` internally to extract structured errors.
-- For `git status` / `git log`: "without CCR" is the full verbose format; CCR injects `--porcelain` / `--oneline` before running the command.
-- `tsc` and `git diff` compress less aggressively by design — errors are already compact, diffs preserve all changes. Savings increase with output size.
+- For `cargo build` / `cargo test`: "without CCR" is standard human-readable output; CCR injects `--message-format json` to extract structured errors.
+- For `git status` / `git log`: "without CCR" is the full verbose format; CCR injects `--porcelain` / `--oneline` before running.
+- `tsc`, `git diff`, and `gradle build` compress less — errors are already compact, diffs preserve changes. Savings scale with output size.
 - Run `ccr gain` after any session to see your real numbers.
 
 ---
