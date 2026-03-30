@@ -60,6 +60,7 @@ Numbers from `ccr/tests/handler_benchmarks.rs` — each handler fed a realistic 
 ## Contents
 
 - [How It Works](#how-it-works)
+- [FAQ](#faq)
 - [Installation](#installation)
 - [Commands](#commands)
 - [Handlers](#handlers)
@@ -101,9 +102,26 @@ CCR is a local-only tool. It never sends data anywhere.
 | What CCR touches | What it reads | Why |
 |-----------------|---------------|-----|
 | Tool output (hook) | stdout/stderr of commands you run (`cargo build`, `git status`, …) | Compress it before Claude sees it |
+| Claude's last message (BERT only) | The single most-recent message in the active session | Used as a relevance query so compression keeps lines relevant to your current task — read-only, never stored |
 | Conversation files (`ccr discover` only) | Local JSONL files Claude Code writes to `~/.claude/` | Find which commands ran without a handler — **opt-in, never automatic** |
 
-The hook **never reads your Claude conversation content, prompts, or chat history.** It only sees the output of shell commands — the same bytes you'd see in your terminal. `ccr discover` is an optional analytics command; you can ignore it entirely and CCR works the same.
+The hook **never reads your prompts or full conversation history.** It sees command output (same bytes as your terminal) and, when BERT compression runs, your single latest message as a relevance signal. Everything stays on your machine. `ccr discover` is an optional analytics command you can ignore entirely.
+
+---
+
+## FAQ
+
+**Does CCR degrade Claude's output quality?**
+No. CCR only removes noise from tool output — build logs, module resolution graphs, passing test lines, progress bars. The signal Claude needs (errors, file paths, summaries) is always kept. Claude sees a cleaner, more focused view of what happened, which if anything improves responses. Several users have run it for extended sessions without noticing any degradation.
+
+**What happens with a tool CCR doesn't know about?**
+It goes through BERT semantic routing — the command name is embedded and compared against all known handlers. If similarity is high enough, the closest handler is applied (filter-only at medium confidence, full rewrite at high confidence). If nothing matches, the output passes through unchanged. CCR never silently drops output.
+
+**How do I know it's actually working?**
+Run `ccr gain` after a session. It shows per-command token counts and total savings. You can also run any command directly through CCR to see the filtered output:
+```bash
+ccr proxy git log --oneline -20   # see exactly what Claude would receive
+```
 
 **What makes CCR different from rule-based proxies:**
 
