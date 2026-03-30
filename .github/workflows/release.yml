@@ -61,18 +61,33 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           URL="https://github.com/AssafWoo/homebrew-ccr/archive/refs/tags/${TAG}.tar.gz"
 
-          # Retry up to 5 times — GitHub may take a moment to publish the tarball
+          # Download to file — piping curl to sha256sum gives wrong hash on partial downloads
           for i in $(seq 1 5); do
-            SHA256=$(curl -fsSL "$URL" | sha256sum | awk '{print $1}')
-            [ -n "$SHA256" ] && break
+            curl -fsSL "$URL" -o /tmp/ccr-release.tar.gz && break
+            echo "Download attempt $i failed, retrying..."
             sleep 5
           done
 
-          # Replace url and sha256 — matches whatever value is currently there
+          # Validate — a real tarball is at least 100 KB
+          SIZE=$(stat -c%s /tmp/ccr-release.tar.gz 2>/dev/null || echo 0)
+          if [ "$SIZE" -lt 102400 ]; then
+            echo "ERROR: tarball is only ${SIZE} bytes — download likely failed"
+            exit 1
+          fi
+
+          SHA256=$(sha256sum /tmp/ccr-release.tar.gz | awk '{print $1}')
+          echo "URL:    $URL"
+          echo "SHA256: $SHA256"
+
+          # Update only the top-level url and sha256 lines (2-space indent).
+          # Resource sha256 lines (6-space indent) are left untouched.
           sed -i \
-            -e "s|url \".*homebrew-ccr.*\"|url \"$URL\"|" \
-            -e "s|sha256 \"[a-f0-9]*\"|sha256 \"$SHA256\"|" \
+            -e "s|^  url \".*homebrew-ccr.*\"|  url \"$URL\"|" \
+            -e "s|^  sha256 \"[a-f0-9]*\"|  sha256 \"$SHA256\"|" \
             Formula/ccr.rb
+
+          echo "--- Formula after update ---"
+          head -6 Formula/ccr.rb
 
       - name: Commit and push formula
         run: |
