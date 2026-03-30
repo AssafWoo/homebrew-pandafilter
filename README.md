@@ -94,6 +94,17 @@ Claude runs: git status  (seen recently)
 
 After `ccr init`, **this is fully automatic** — no changes to how you use Claude Code.
 
+### Privacy model
+
+CCR is a local-only tool. It never sends data anywhere.
+
+| What CCR touches | What it reads | Why |
+|-----------------|---------------|-----|
+| Tool output (hook) | stdout/stderr of commands you run (`cargo build`, `git status`, …) | Compress it before Claude sees it |
+| Conversation files (`ccr discover` only) | Local JSONL files Claude Code writes to `~/.claude/` | Find which commands ran without a handler — **opt-in, never automatic** |
+
+The hook **never reads your Claude conversation content, prompts, or chat history.** It only sees the output of shell commands — the same bytes you'd see in your terminal. `ccr discover` is an optional analytics command; you can ignore it entirely and CCR works the same.
+
 **What makes CCR different from rule-based proxies:**
 
 - **46 handlers (60+ aliases)** — purpose-built filters for common dev tools (cargo, git, kubectl, gh, terraform, pytest, tsc, vite, webpack, turbo, biome, …)
