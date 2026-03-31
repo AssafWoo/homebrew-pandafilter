@@ -79,7 +79,7 @@ enum Commands {
         #[arg(long)]
         reset: bool,
     },
-    /// Update CCR to the latest release
+    /// Update CCR (use `brew upgrade assafwoo/ccr/ccr` instead)
     Update,
     /// Compress a conversation JSON to reduce token count
     Compress {
@@ -133,7 +133,16 @@ fn main() {
         Commands::Discover => cmd::discover::run(),
         Commands::Expand { id, list } => cmd::expand::run(id.as_deref().unwrap_or(""), list),
         Commands::Noise { reset } => cmd::noise::run(reset),
-        Commands::Update => cmd::update::run(),
+        Commands::Update => {
+            println!("ccr update is deprecated.");
+            println!();
+            println!("Update with Homebrew:");
+            println!("  brew update && brew upgrade assafwoo/ccr/ccr");
+            println!();
+            println!("Or reinstall:");
+            println!("  curl -fsSL https://github.com/AssafWoo/homebrew-ccr/raw/main/install.sh | bash");
+            Ok(())
+        }
         Commands::Compress { input, output, recent_turns, tier1_turns, ollama, ollama_model, max_tokens, dry_run, scan_session } =>
             cmd::compress::run(&input, output.as_deref(), recent_turns, tier1_turns, ollama.as_deref(), &ollama_model, max_tokens, dry_run, scan_session),
     };
