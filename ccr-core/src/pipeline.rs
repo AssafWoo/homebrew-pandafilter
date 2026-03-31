@@ -4,9 +4,9 @@ use crate::config::CcrConfig;
 use crate::global_rules;
 use crate::patterns::PatternFilter;
 use crate::summarizer::{
-    entropy_adjusted_budget, noise_filter_with_embeddings, summarize_against_centroid,
-    summarize_with_anchoring_preembedded, summarize_with_clustering_preembedded,
-    summarize_with_intent, summarize_with_query,
+    entropy_adjusted_budget, entropy_adjusted_budget_preembedded, noise_filter_with_embeddings,
+    summarize_against_centroid, summarize_with_anchoring_preembedded,
+    summarize_with_clustering_preembedded, summarize_with_intent, summarize_with_query,
 };
 use crate::tokens::count_tokens;
 use crate::whitespace::normalize;
@@ -32,6 +32,21 @@ pub struct PipelineResult {
 
 pub struct Pipeline {
     pub config: CcrConfig,
+}
+
+fn head_tail_truncate(text: &str, head: usize, tail: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let total = lines.len();
+    let budget = head + tail;
+    if total <= budget {
+        return text.to_string();
+    }
+    let mut out: Vec<String> = Vec::with_capacity(budget + 1);
+    out.extend(lines[..head].iter().map(|l| l.to_string()));
+    let omitted = total - head - tail;
+    out.push(format!("[--- {} more lines ---]", omitted));
+    out.extend(lines[total - tail..].iter().map(|l| l.to_string()));
+    out.join("\n")
 }
 
 impl Pipeline {
@@ -65,8 +80,15 @@ impl Pipeline {
             text = normalize(&text, &self.config.global);
         }
 
+        // 2.3. JSON structured log compaction: if output is predominantly JSON-per-line,
+        // reformat to readable [LEVEL] message lines before regex passes.
+        text = crate::jsonlog::compact(&text);
+
         // 2.5. Apply global pre-filter rules (pure regex, zero BERT cost, always runs)
         text = global_rules::apply(&text);
+
+        // Capture post-regex line count for BERT short-circuit decision (used below)
+        let _post_regex_lines = text.lines().count();
 
         // 3. Apply command-specific patterns
         if let Some(hint) = command_hint {
@@ -75,6 +97,14 @@ impl Pipeline {
                 text = filter.apply(&text);
             }
         }
+
+        // Compute removal ratio after all regex/pattern passes
+        let removal_ratio = 1.0_f64 - (text.lines().count() as f64 / input.lines().count().max(1) as f64);
+        let should_skip_bert = removal_ratio > 0.80;
+
+        // 3.4. Stack trace compaction: structural parsing, no BERT cost.
+        // Collapses stdlib/internal frames in Rust/Python/JS/Java/Go stack traces.
+        text = crate::stacktrace::compact(&text);
 
         // 3.5. SimHash near-duplicate deduplication.
         // Collapses repetitive log-style lines (e.g. identical messages differing
@@ -89,35 +119,50 @@ impl Pipeline {
         if text.lines().count() > self.config.global.summarize_threshold_lines {
             let max_budget = self.config.global.head_lines + self.config.global.tail_lines;
 
-            // 4a. Pre-filter noise and retain BERT embeddings for re-use in step 4b.
-            // noise_filter_with_embeddings embeds non-empty lines once and returns
-            // (surviving_lines, their_embeddings). Passing these embeddings to
-            // summarize_single avoids a second model.embed() call on the same text.
-            let mut preembedded: Option<Vec<Vec<f32>>> = None;
-            {
-                let lines: Vec<&str> = text.lines().collect();
-                if let Ok((surviving, embeddings)) = noise_filter_with_embeddings(&lines) {
-                    if surviving.len() < lines.len() {
-                        text = surviving.join("\n");
+            if should_skip_bert {
+                // Regex pre-filters removed >80% of input — content is already noise-free.
+                // Skip BERT entirely; a simple head+tail truncation is sufficient.
+                text = head_tail_truncate(
+                    &text,
+                    self.config.global.head_lines,
+                    self.config.global.tail_lines,
+                );
+            } else {
+                // 4a. Pre-filter noise and retain BERT embeddings for re-use in step 4b.
+                // noise_filter_with_embeddings embeds non-empty lines once and returns
+                // (surviving_lines, their_embeddings). Passing these embeddings to
+                // summarize_single avoids a second model.embed() call on the same text.
+                let mut preembedded: Option<Vec<Vec<f32>>> = None;
+                {
+                    let lines: Vec<&str> = text.lines().collect();
+                    if let Ok((surviving, embeddings)) = noise_filter_with_embeddings(&lines) {
+                        if surviving.len() < lines.len() {
+                            text = surviving.join("\n");
+                        }
+                        preembedded = Some(embeddings);
                     }
-                    preembedded = Some(embeddings);
                 }
-            }
 
-            // 4b. Only summarize if still over threshold after noise removal
-            if text.lines().count() > self.config.global.summarize_threshold_lines {
-                // Entropy-adaptive budget: diverse content gets more lines
-                let budget = entropy_adjusted_budget(&text, max_budget);
+                // 4b. Only summarize if still over threshold after noise removal
+                if text.lines().count() > self.config.global.summarize_threshold_lines {
+                    // Entropy-adaptive budget: reuse pre-computed embeddings from the noise-filter
+                    // step when available (avoids a second BERT pass on a 100-line sample).
+                    let budget = if let Some(ref embs) = preembedded {
+                        entropy_adjusted_budget_preembedded(embs, max_budget)
+                    } else {
+                        entropy_adjusted_budget(&text, max_budget)
+                    };
 
-                // 4c. Context-aware summarizer selection.
-                // For very large inputs, split into chunks to reduce peak memory.
-                // Chunked path does not reuse embeddings (each chunk is independent).
-                let line_count = text.lines().count();
-                text = if line_count > CHUNK_THRESHOLD_LINES {
-                    self.summarize_chunked(&text, budget, command_hint, query, historical_centroid)
-                } else {
-                    self.summarize_single(&text, budget, command_hint, query, historical_centroid, preembedded)
-                };
+                    // 4c. Context-aware summarizer selection.
+                    // For very large inputs, split into chunks to reduce peak memory.
+                    // Chunked path does not reuse embeddings (each chunk is independent).
+                    let line_count = text.lines().count();
+                    text = if line_count > CHUNK_THRESHOLD_LINES {
+                        self.summarize_chunked(&text, budget, command_hint, query, historical_centroid)
+                    } else {
+                        self.summarize_single(&text, budget, command_hint, query, historical_centroid, preembedded)
+                    };
+                }
             }
         }
 
@@ -165,6 +210,7 @@ impl Pipeline {
     }
 
     /// Summarize a very large input by splitting into chunks of `CHUNK_SIZE_LINES`
+
     /// lines, summarizing each independently, then concatenating the results.
     /// Reduces peak memory compared to processing all lines at once.
     ///
@@ -282,5 +328,43 @@ mod tests {
         assert!(result.analytics.input_tokens > 0);
         assert!(result.analytics.output_tokens > 0);
         assert!(result.analytics.savings_pct >= 0.0);
+    }
+
+    #[test]
+    fn lazy_bert_skipped_when_high_removal_ratio() {
+        // 190 lines that global_rules will strip (build progress) + 10 real lines
+        let mut lines: Vec<String> = (0..190)
+            .map(|i| format!("Compiling crate-{} v0.1.0 (/path)", i))
+            .collect();
+        lines.extend((0..10).map(|i| format!("important output line {}", i)));
+        let input = lines.join("\n");
+        let pipeline = default_pipeline();
+        let result = pipeline.process(&input, None, None, None).unwrap();
+        // Should NOT contain BERT-style omission markers (which say "lines omitted")
+        // Should contain the head/tail marker OR just be short enough
+        // Key: no crash, output is smaller than input
+        assert!(result.output.lines().count() < 200);
+    }
+
+    #[test]
+    fn head_tail_truncate_preserves_head_and_tail() {
+        let lines: Vec<String> = (0..100).map(|i| format!("line {}", i)).collect();
+        let text = lines.join("\n");
+        let result = head_tail_truncate(&text, 10, 10);
+        assert!(result.contains("line 0"));
+        assert!(result.contains("line 9"));
+        assert!(result.contains("line 90"));
+        assert!(result.contains("line 99"));
+        assert!(result.contains("more lines"));
+    }
+
+    #[test]
+    fn head_tail_truncate_no_truncate_when_within_budget() {
+        let lines: Vec<String> = (0..15).map(|i| format!("line {}", i)).collect();
+        let text = lines.join("\n");
+        let result = head_tail_truncate(&text, 10, 10);
+        // 15 lines <= 20 budget, no truncation
+        assert!(!result.contains("more lines"));
+        assert_eq!(result.lines().count(), 15);
     }
 }

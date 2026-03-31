@@ -126,14 +126,41 @@ pub fn preload_model() -> anyhow::Result<()> {
 
 // ── Math helpers ──────────────────────────────────────────────────────────────
 
+/// L2-normalize `v` in-place. No-op for zero vectors.
+#[inline(always)]
+fn l2_normalize(v: &mut Vec<f32>) {
+    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 1e-9 {
+        v.iter_mut().for_each(|x| *x /= norm);
+    }
+}
+
+/// Dot product of two slices. Equivalent to cosine similarity when both are L2-normalized.
+#[inline(always)]
+fn dot(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+}
+
+/// Cosine similarity. All embeddings are L2-normalized at embedding time (via
+/// `embed_and_normalize`), so this reduces to a plain dot product — no sqrt needed.
+/// Clamped to [-1, 1] to absorb floating-point rounding errors that can push
+/// the dot product of two near-identical unit vectors just above 1.0.
+#[inline(always)]
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 {
+    dot(a, b).clamp(-1.0, 1.0)
+}
+
+/// Returns the value at `percentile` (0.0–1.0) of the score distribution.
+/// `percentile = 0.70` → 70% of scores fall below the returned value,
+/// so lines above it represent the top 30%.
+fn score_percentile(scored: &[(usize, f32)], percentile: f32) -> f32 {
+    if scored.is_empty() {
         return 0.0;
     }
-    dot / (norm_a * norm_b)
+    let mut vals: Vec<f32> = scored.iter().map(|(_, s)| *s).collect();
+    vals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let idx = ((vals.len() as f32 * percentile) as usize).min(vals.len() - 1);
+    vals[idx]
 }
 
 fn compute_centroid(embeddings: &[Vec<f32>]) -> Vec<f32> {
@@ -149,7 +176,24 @@ fn compute_centroid(embeddings: &[Vec<f32>]) -> Vec<f32> {
     }
     let n = embeddings.len() as f32;
     centroid.iter_mut().for_each(|v| *v /= n);
+    // Normalize so the centroid is a unit vector; downstream similarity calls
+    // can then use plain dot products instead of full cosine similarity.
+    l2_normalize(&mut centroid);
     centroid
+}
+
+/// Embed `texts` and L2-normalize every output vector.
+/// All downstream similarity calls can then use `dot` instead of full cosine similarity,
+/// eliminating two sqrt calls per pair.
+fn embed_and_normalize(
+    model: &fastembed::TextEmbedding,
+    texts: Vec<&str>,
+) -> anyhow::Result<Vec<Vec<f32>>> {
+    let mut embeddings = model.embed(texts, None)?;
+    for emb in &mut embeddings {
+        l2_normalize(emb);
+    }
+    Ok(embeddings)
 }
 
 // ── Public result types ───────────────────────────────────────────────────────
@@ -247,17 +291,19 @@ fn summarize_semantic_intent(
     texts.push(command);
     texts.push(intent);
 
-    let all_embeddings = model.embed(texts, None)?;
+    let all_embeddings = embed_and_normalize(model, texts)?;
     let n = indexed_lines.len();
     let cmd_emb = &all_embeddings[n];
     let intent_emb = &all_embeddings[n + 1];
     let embeddings = &all_embeddings[..n];
 
-    // Blend: 30% command relevance + 70% intent relevance
+    // Blend: 30% command relevance + 70% intent relevance, then re-normalize
+    // so the blended query remains a unit vector for correct dot-product similarity.
     let dim = cmd_emb.len();
-    let blended_query: Vec<f32> = (0..dim)
+    let mut blended_query: Vec<f32> = (0..dim)
         .map(|i| 0.30 * cmd_emb[i] + 0.70 * intent_emb[i])
         .collect();
+    l2_normalize(&mut blended_query);
 
     let centroid = compute_centroid(embeddings);
 
@@ -356,14 +402,15 @@ fn summarize_semantic(
 
     let model = get_model()?;
 
-    // Embed lines + optional query in one batch
+    // Embed lines + optional query in one batch, L2-normalizing all vectors so
+    // downstream similarity calls reduce to plain dot products.
     let mut texts: Vec<&str> = indexed_lines.iter().map(|(_, l)| *l).collect();
     let has_query = query.is_some();
     if let Some(q) = query {
         texts.push(q);
     }
 
-    let all_embeddings = model.embed(texts, None)?;
+    let all_embeddings = embed_and_normalize(model, texts)?;
     let query_emb: Option<&Vec<f32>> = if has_query { all_embeddings.last() } else { None };
     let embeddings = if has_query {
         &all_embeddings[..all_embeddings.len() - 1]
@@ -533,7 +580,7 @@ fn summarize_semantic_anchored(
         } else {
             let model = get_model()?;
             let texts: Vec<&str> = indexed_lines.iter().map(|(_, l)| *l).collect();
-            model.embed(texts, None)?
+            embed_and_normalize(model, texts)?
         };
 
     let centroid = compute_centroid(&embeddings);
@@ -677,7 +724,7 @@ pub fn entropy_adjusted_budget(text: &str, max_budget: usize) -> usize {
     let step = (lines.len() / 100).max(1);
     let sample: Vec<&str> = lines.iter().step_by(step).copied().collect();
 
-    let embeddings = match model.embed(sample, None) {
+    let embeddings = match embed_and_normalize(model, sample) {
         Ok(e) => e,
         Err(_) => return max_budget,
     };
@@ -692,6 +739,37 @@ pub fn entropy_adjusted_budget(text: &str, max_budget: usize) -> usize {
         max_budget
     } else {
         // Interpolate: 5% → 100% of max_budget
+        let t = (entropy - LOW_ENTROPY_CUTOFF) / (HIGH_ENTROPY_CUTOFF - LOW_ENTROPY_CUTOFF);
+        let fraction = 0.05 + t * 0.95;
+        ((max_budget as f32 * fraction) as usize).max(1)
+    }
+}
+
+/// Like [`entropy_adjusted_budget`] but operates on pre-computed L2-normalized embeddings,
+/// skipping a second BERT pass when embeddings are already available from the noise-filter step.
+///
+/// This is the path taken by the pipeline when `noise_filter_with_embeddings` has already
+/// embedded the surviving lines — we reuse those vectors rather than re-embedding a text sample.
+pub fn entropy_adjusted_budget_preembedded(embeddings: &[Vec<f32>], max_budget: usize) -> usize {
+    const THRESHOLD_LINES: usize = 200;
+    const LOW_ENTROPY_CUTOFF: f32 = 0.10;
+    const HIGH_ENTROPY_CUTOFF: f32 = 0.35;
+
+    if embeddings.len() < THRESHOLD_LINES {
+        return max_budget;
+    }
+
+    // Sample up to 100 embeddings evenly — mirrors the sampling in `entropy_adjusted_budget`.
+    let step = (embeddings.len() / 100).max(1);
+    let sample: Vec<Vec<f32>> = embeddings.iter().step_by(step).cloned().collect();
+
+    let entropy = semantic_entropy(&sample);
+
+    if entropy <= LOW_ENTROPY_CUTOFF {
+        ((max_budget as f32 * 0.05) as usize).max(1)
+    } else if entropy >= HIGH_ENTROPY_CUTOFF {
+        max_budget
+    } else {
         let t = (entropy - LOW_ENTROPY_CUTOFF) / (HIGH_ENTROPY_CUTOFF - LOW_ENTROPY_CUTOFF);
         let fraction = 0.05 + t * 0.95;
         ((max_budget as f32 * fraction) as usize).max(1)
@@ -803,7 +881,7 @@ fn summarize_sentences_semantic(
 ) -> anyhow::Result<String> {
     let model = get_model()?;
     let texts: Vec<&str> = sentences.iter().map(|s| s.as_str()).collect();
-    let embeddings = model.embed(texts, None)?;
+    let embeddings = embed_and_normalize(model, texts)?;
 
     let centroid = compute_centroid(&embeddings);
 
@@ -911,7 +989,7 @@ fn do_cluster_summarize(
         } else {
             let model = get_model()?;
             let texts: Vec<&str> = indexed.iter().map(|(_, l)| *l).collect();
-            model.embed(texts, None)?
+            embed_and_normalize(model, texts)?
         };
 
     // ── Greedy clustering ────────────────────────────────────────────────────
@@ -934,6 +1012,9 @@ fn do_cluster_summarize(
                 for (j, v) in emb.iter().enumerate() {
                     centroids[cid][j] = (centroids[cid][j] * count + v) / nc;
                 }
+                // Re-normalize the running centroid (spherical k-means) so it stays a
+                // unit vector; downstream dot products remain valid cosine similarities.
+                l2_normalize(&mut centroids[cid]);
                 sizes[cid] += 1;
                 member_cluster[i] = cid;
             }
@@ -1060,14 +1141,20 @@ fn summarize_against_centroid_inner(
 
     let model = get_model()?;
     let texts: Vec<&str> = indexed_lines.iter().map(|(_, l)| *l).collect();
-    let embeddings = model.embed(texts, None)?;
+    let embeddings = embed_and_normalize(model, texts)?;
+
+    // Normalize the historical centroid at the point of use so it is compatible with
+    // the unit-length line embeddings regardless of when it was stored (before or after
+    // the pre-normalization optimization was introduced).
+    let mut norm_centroid = historical_centroid.to_vec();
+    l2_normalize(&mut norm_centroid);
 
     // Score anomaly against the historical centroid (not the current batch's centroid)
     let scored: Vec<(usize, f32)> = indexed_lines
         .iter()
         .zip(embeddings.iter())
         .map(|((orig_idx, _), emb)| {
-            let anomaly = 1.0 - cosine_similarity(emb, historical_centroid);
+            let anomaly = 1.0 - cosine_similarity(emb, &norm_centroid);
             (*orig_idx, anomaly)
         })
         .collect();
@@ -1139,14 +1226,18 @@ static NOISE_EMB: OnceCell<Vec<f32>> = OnceCell::new();
 fn useful_embedding() -> anyhow::Result<&'static Vec<f32>> {
     USEFUL_EMB.get_or_try_init(|| {
         let model = get_model()?;
-        Ok(model.embed(vec![USEFUL_PROTOTYPE], None)?.remove(0))
+        let mut emb = model.embed(vec![USEFUL_PROTOTYPE], None)?.remove(0);
+        l2_normalize(&mut emb);
+        Ok(emb)
     })
 }
 
 fn noise_embedding() -> anyhow::Result<&'static Vec<f32>> {
     NOISE_EMB.get_or_try_init(|| {
         let model = get_model()?;
-        Ok(model.embed(vec![NOISE_PROTOTYPE], None)?.remove(0))
+        let mut emb = model.embed(vec![NOISE_PROTOTYPE], None)?.remove(0);
+        l2_normalize(&mut emb);
+        Ok(emb)
     })
 }
 
@@ -1165,7 +1256,7 @@ pub fn noise_scores(lines: &[&str]) -> anyhow::Result<Vec<f32>> {
     let useful_emb = useful_embedding()?;
     let noise_emb = noise_embedding()?;
 
-    let embeddings = model.embed(lines.to_vec(), None)?;
+    let embeddings = embed_and_normalize(model, lines.to_vec())?;
 
     let scores = embeddings
         .iter()
@@ -1213,7 +1304,7 @@ pub fn noise_filter_with_embeddings(
     let noise_emb = noise_embedding()?;
 
     let texts: Vec<&str> = non_empty.iter().map(|(_, l)| *l).collect();
-    let embeddings = model.embed(texts, None)?;
+    let embeddings = embed_and_normalize(model, texts)?;
 
     // Mark noisy lines for removal
     let mut drop_set: std::collections::HashSet<usize> = std::collections::HashSet::new();
@@ -1248,7 +1339,7 @@ pub fn noise_filter_with_embeddings(
 
 pub fn embed_batch(texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
     let model = get_model()?;
-    Ok(model.embed(texts.to_vec(), None)?)
+    embed_and_normalize(model, texts.to_vec())
 }
 
 /// Compute the mean embedding of all non-empty lines in `text`.
@@ -1270,14 +1361,15 @@ pub fn compute_output_centroid(text: &str) -> anyhow::Result<Vec<f32>> {
     }
     let n = embeddings.len() as f32;
     centroid.iter_mut().for_each(|c| *c /= n);
+    l2_normalize(&mut centroid);
     Ok(centroid)
 }
 
 /// Compute semantic similarity between two texts. Used as a quality gate on generative output.
 pub fn semantic_similarity(a: &str, b: &str) -> anyhow::Result<f32> {
     let model = get_model()?;
-    let embeddings = model.embed(vec![a, b], None)?;
-    Ok(cosine_similarity(&embeddings[0], &embeddings[1]))
+    let embeddings = embed_and_normalize(model, vec![a, b])?;
+    Ok(dot(&embeddings[0], &embeddings[1]))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -1341,5 +1433,101 @@ mod tests {
         let input = lines.join("\n");
         let result = summarize(&input, 10);
         assert!(result.output.lines().count() <= 100);
+    }
+
+    // ── Math helper unit tests ────────────────────────────────────────────────
+
+    #[test]
+    fn l2_normalize_produces_unit_vector() {
+        let mut v = vec![3.0f32, 4.0];
+        l2_normalize(&mut v);
+        let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-6, "norm was {}", norm);
+        // Direction preserved: 3/5 = 0.6, 4/5 = 0.8
+        assert!((v[0] - 0.6).abs() < 1e-6);
+        assert!((v[1] - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn l2_normalize_zero_vector_is_noop() {
+        let mut v = vec![0.0f32, 0.0, 0.0];
+        l2_normalize(&mut v);
+        assert_eq!(v, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn dot_orthogonal_vectors_is_zero() {
+        let a = vec![1.0f32, 0.0];
+        let b = vec![0.0f32, 1.0];
+        assert!((dot(&a, &b)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn dot_identical_unit_vectors_is_one() {
+        let mut v = vec![3.0f32, 4.0];
+        l2_normalize(&mut v);
+        assert!((dot(&v, &v) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn score_percentile_70th() {
+        // scores: 0.0, 0.1, 0.2, ..., 0.9  (10 values)
+        let scored: Vec<(usize, f32)> = (0..10).map(|i| (i, i as f32 / 10.0)).collect();
+        let p = score_percentile(&scored, 0.70);
+        // 70th percentile of 10 values → index 7 → value 0.7
+        assert!((p - 0.7).abs() < 1e-5, "p70 was {}", p);
+    }
+
+    #[test]
+    fn score_percentile_empty_returns_zero() {
+        let empty: Vec<(usize, f32)> = vec![];
+        assert_eq!(score_percentile(&empty, 0.70), 0.0);
+    }
+
+    #[test]
+    fn score_percentile_single_element() {
+        let scored = vec![(0usize, 0.5f32)];
+        assert!((score_percentile(&scored, 0.70) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn entropy_budget_preembedded_returns_valid_range() {
+        // Diverse embeddings (orthogonal unit vectors) → high entropy → full budget.
+        let dim = 8usize;
+        let embeddings: Vec<Vec<f32>> = (0..250)
+            .map(|i| {
+                let mut v = vec![0.0f32; dim];
+                v[i % dim] = 1.0;
+                v
+            })
+            .collect();
+        let max_budget = 60;
+        let budget = entropy_adjusted_budget_preembedded(&embeddings, max_budget);
+        assert!(budget >= 1, "budget was 0");
+        assert!(budget <= max_budget, "budget {} > max {}", budget, max_budget);
+    }
+
+    #[test]
+    fn entropy_budget_preembedded_identical_embeddings_low_budget() {
+        // All identical embeddings → zero entropy → max compression (~5% of budget).
+        let unit = vec![1.0f32, 0.0, 0.0, 0.0];
+        let embeddings: Vec<Vec<f32>> = (0..250).map(|_| unit.clone()).collect();
+        let max_budget = 60;
+        let budget = entropy_adjusted_budget_preembedded(&embeddings, max_budget);
+        // Should produce ~5% of max_budget (≥1 due to .max(1))
+        assert!(budget >= 1);
+        assert!(budget <= (max_budget as f32 * 0.10) as usize + 1,
+            "expected low budget for uniform input, got {}", budget);
+    }
+
+    #[test]
+    fn compute_centroid_is_unit_vector() {
+        let embeddings = vec![
+            vec![1.0f32, 0.0],
+            vec![0.0f32, 1.0],
+        ];
+        let c = compute_centroid(&embeddings);
+        let norm: f32 = c.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-5, "centroid norm was {}", norm);
     }
 }

@@ -11,6 +11,7 @@ Numbers from `ccr/tests/handler_benchmarks.rs` — each handler fed a realistic 
 | Operation | Without CCR | With CCR | Savings |
 |-----------|------------:|---------:|:-------:|
 | `pip install` | 1,787 | 9 | **−99%** |
+| `uv sync` | 1,574 | 15 | **−99%** |
 | `playwright test` | 1,367 | 19 | **−99%** |
 | `gradle build` | 803 | 17 | **−98%** |
 | `go test` | 4,507 | 148 | **−97%** |
@@ -26,7 +27,9 @@ Numbers from `ccr/tests/handler_benchmarks.rs` — each handler fed a realistic 
 | `ls` | 691 | 102 | **−85%** |
 | `webpack` | 882 | 143 | **−84%** |
 | `vitest` | 625 | 103 | **−84%** |
+| `nx run-many` | 1,541 | 273 | **−82%** |
 | `turbo run build` | 597 | 115 | **−81%** |
+| `ruff check` | 2,035 | 435 | −79% |
 | `eslint` | 4,393 | 974 | −78% |
 | `git log` | 1,573 | 353 | −78% |
 | `grep` | 2,925 | 691 | −76% |
@@ -44,8 +47,9 @@ Numbers from `ccr/tests/handler_benchmarks.rs` — each handler fed a realistic 
 | `git diff` | 6,370 | 2,654 | −58% |
 | `biome lint` | 1,503 | 753 | −50% |
 | `tsc` | 2,598 | 1,320 | −49% |
+| `mypy` | 2,053 | 1,088 | −47% |
 | `stylelint` | 1,100 | 845 | −23% |
-| **Total** | **62,524** | **14,035** | **−78%** |
+| **Total** | **69,727** | **15,846** | **−77%** |
 
 **Notes:**
 - For `cargo build` / `cargo test`: "without CCR" is standard human-readable output; CCR injects `--message-format json` to extract structured errors.
@@ -133,7 +137,7 @@ ccr proxy git log --oneline -20
 
 **What makes CCR different from rule-based proxies:**
 
-- **46 handlers (60+ aliases)** — purpose-built filters for common dev tools (cargo, git, kubectl, gh, terraform, pytest, tsc, vite, webpack, turbo, biome, …)
+- **50 handlers (60+ aliases)** — purpose-built filters for common dev tools (cargo, git, kubectl, gh, terraform, pytest, tsc, vite, webpack, turbo, biome, uv, ruff, mypy, nx, …)
 - **Global regex pre-filter** — strips progress bars, spinners, download lines, and decorators before BERT even loads
 - **BERT semantic routing** — unknown commands matched to nearest handler via sentence embeddings, with confidence tiers and margin gating
 - **Intent-aware compression** — uses Claude's last message as the BERT query so output relevant to the current task scores highest
@@ -266,7 +270,7 @@ ccr proxy git status  # run raw (no filtering), record analytics baseline
 
 ## Handlers
 
-40 handlers (50+ command aliases) in `ccr/src/handlers/`. Lookup cascade:
+44 handlers (55+ command aliases) in `ccr/src/handlers/`. Lookup cascade:
 
 1. **Level 0 — User filters** — `.ccr/filters.toml` or `~/.config/ccr/filters.toml` (overrides built-in)
 2. **Level 1 — Exact match** — direct command name
@@ -279,7 +283,8 @@ ccr proxy git status  # run raw (no filtering), record analytics baseline
 |---------|------|---------|-------------|
 | **tsc** | `tsc` | ~50% | Groups errors by file; deduplicates repeated TS codes; truncates verbose type messages. `Build OK` on clean. |
 | **vitest** | `vitest` | ~84% | FAIL blocks + summary; drops `✓` lines. |
-| **jest** | `jest`, `bun`, `deno`, `nx` | ~65% | `●` failure blocks + summary; drops `PASS` lines. |
+| **jest** | `jest`, `bun`, `deno` | ~65% | `●` failure blocks + summary; drops `PASS` lines. |
+| **nx** | `nx`, `npx nx` | ~82% | `run-many`/`affected`: passing tasks collapsed to `[N tasks passed (N cached)]`; failing task output + error preserved verbatim. Injects `--output-style=stream`. |
 | **eslint** | `eslint` | ~78% | Errors grouped by file, caps at 20 + `[+N more]`. |
 | **next** | `next` | ~90% | `build`: route table collapsed, errors + page count. `dev`: errors + ready line. |
 | **playwright** | `playwright` | ~99% | Failing test names + error messages; passing tests dropped. |
@@ -295,7 +300,10 @@ ccr proxy git status  # run raw (no filtering), record analytics baseline
 | Handler | Keys | Savings | Key behavior |
 |---------|------|---------|-------------|
 | **pytest** | `pytest`, `py.test` | ~87% | FAILED node IDs + AssertionError + short summary. |
-| **pip** | `pip`, `pip3`, `uv`, `poetry`, `pdm`, `conda` | ~80% | `install`: `[complete — N packages]` or already-satisfied short-circuit. |
+| **uv** | `uv`, `uvx` | ~99% | `install`/`sync`/`add`: strips Downloading/Fetching/Preparing, Python version banner, venv creation, Resolved/Audited noise. Keeps errors, warnings, and final installed summary. |
+| **ruff** | `ruff` | ~79% | `check`: violations grouped by error code, first 3 shown + `[N more]`. `format`: summary line only. Clean run → `ruff: ok`. Injects `--output-format concise`. |
+| **mypy** | `mypy`, `mypy3` | ~47% | Errors grouped by file, capped at 10 per file with `[N more errors]`. Notes stripped. Daemon startup lines stripped. Clean run → `mypy: ok`. |
+| **pip** | `pip`, `pip3`, `poetry`, `pdm`, `conda` | ~80% | `install`: `[complete — N packages]` or already-satisfied short-circuit. |
 | **python** | `python`, `python3`, `python3.X` | ~60% | Traceback: keep block + final error. Long output: BERT. |
 
 **DevOps / Cloud**

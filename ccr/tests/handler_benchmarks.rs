@@ -30,15 +30,19 @@ use ccr::handlers::{
     ls::LsHandler,
     make::MakeHandler,
     maven::{GradleHandler, MavenHandler},
+    mypy::MypyHandler,
     next::NextHandler,
     npm::NpmHandler,
+    nx::NxHandler,
     pip::PipHandler,
     playwright::PlaywrightHandler,
     pytest::PytestHandler,
+    ruff::RuffHandler,
     stylelint::StylelintHandler,
     terraform::TerraformHandler,
     tsc::TscHandler,
     turbo::TurboHandler,
+    uv::UvHandler,
     vitest::VitestHandler,
     vite::ViteHandler,
     webpack::WebpackHandler,
@@ -2232,4 +2236,394 @@ fn benchmark_grep_tool_short_passthrough() {
     let out = handler.filter(input, &["grep".to_string()]);
     // 2 lines: the GrepHandler should still work fine (just groups them)
     assert!(!out.is_empty());
+}
+
+// ─── New handler fixtures ─────────────────────────────────────────────────────
+
+/// `uv sync` on a large Django + ML project (100 packages, 85 downloads).
+/// Mirrors real `uv sync` output: Python version banner, venv creation, many
+/// Downloading/Fetching/Preparing lines, Resolved/Audited noise, then the
+/// final "Installed N packages" summary.
+fn uv_install_large() -> String {
+    let packages = [
+        ("django",              "4.2.7",   "7.2 MB"),
+        ("djangorestframework", "3.14.0",  "1.1 MB"),
+        ("celery",              "5.3.4",   "1.4 MB"),
+        ("redis",               "5.0.1",   "252 kB"),
+        ("psycopg2-binary",     "2.9.9",   "3.1 MB"),
+        ("pillow",              "10.1.0",  "46.9 MB"),
+        ("boto3",               "1.34.0",  "1.3 MB"),
+        ("botocore",            "1.34.0",  "10.4 MB"),
+        ("s3transfer",          "0.8.2",   "84 kB"),
+        ("jmespath",            "1.0.1",   "24 kB"),
+        ("numpy",               "1.26.2",  "17.1 MB"),
+        ("pandas",              "2.1.3",   "11.8 MB"),
+        ("scikit-learn",        "1.3.2",   "10.3 MB"),
+        ("scipy",               "1.11.4",  "36.3 MB"),
+        ("matplotlib",          "3.8.2",   "7.4 MB"),
+        ("seaborn",             "0.13.0",  "292 kB"),
+        ("requests",            "2.31.0",  "62 kB"),
+        ("httpx",               "0.25.2",  "75 kB"),
+        ("pydantic",            "2.5.2",   "398 kB"),
+        ("pydantic-core",       "2.14.5",  "1.8 MB"),
+        ("fastapi",             "0.104.1", "91 kB"),
+        ("uvicorn",             "0.24.0",  "60 kB"),
+        ("starlette",           "0.27.0",  "71 kB"),
+        ("anyio",               "4.1.0",   "86 kB"),
+        ("sniffio",             "1.3.0",   "15 kB"),
+        ("sqlalchemy",          "2.0.23",  "9.4 MB"),
+        ("alembic",             "1.12.1",  "1.1 MB"),
+        ("mako",                "1.3.0",   "381 kB"),
+        ("greenlet",            "3.0.1",   "297 kB"),
+        ("cryptography",        "41.0.7",  "4.1 MB"),
+        ("cffi",                "1.16.0",  "476 kB"),
+        ("pycparser",           "2.21",    "173 kB"),
+        ("paramiko",            "3.3.1",   "291 kB"),
+        ("bcrypt",              "4.1.1",   "535 kB"),
+        ("PyNaCl",              "1.5.0",   "1.1 MB"),
+        ("python-dotenv",       "1.0.0",   "21 kB"),
+        ("click",               "8.1.7",   "96 kB"),
+        ("rich",                "13.7.0",  "243 kB"),
+        ("typer",               "0.9.0",   "45 kB"),
+        ("pytest",              "7.4.3",   "223 kB"),
+        ("pytest-django",       "4.7.0",   "58 kB"),
+        ("pytest-asyncio",      "0.21.1",  "49 kB"),
+        ("factory-boy",         "3.3.0",   "68 kB"),
+        ("faker",               "20.1.0",  "1.8 MB"),
+        ("coverage",            "7.3.2",   "442 kB"),
+        ("mypy",                "1.7.1",   "13.5 MB"),
+        ("mypy-extensions",     "1.0.0",   "8.7 kB"),
+        ("types-requests",      "2.31.0",  "32 kB"),
+        ("ruff",                "0.1.7",   "7.4 MB"),
+        ("black",               "23.11.0", "642 kB"),
+        ("isort",               "5.13.0",  "82 kB"),
+        ("flake8",              "6.1.0",   "112 kB"),
+        ("pycodestyle",         "2.11.1",  "42 kB"),
+        ("pyflakes",            "3.1.0",   "73 kB"),
+        ("mccabe",              "0.7.0",   "10 kB"),
+        ("pre-commit",          "3.6.0",   "196 kB"),
+        ("identify",            "2.5.32",  "97 kB"),
+        ("nodeenv",             "1.8.0",   "25 kB"),
+        ("cfgv",                "3.4.0",   "7.5 kB"),
+        ("virtualenv",          "20.25.0", "3.5 MB"),
+        ("distlib",             "0.3.8",   "468 kB"),
+        ("filelock",            "3.13.1",  "13 kB"),
+        ("platformdirs",        "4.1.0",   "19 kB"),
+        ("setuptools",          "69.0.2",  "2.3 MB"),
+        ("wheel",               "0.41.3",  "37 kB"),
+        ("pip",                 "23.3.2",  "2.3 MB"),
+        ("packaging",           "23.2",    "51 kB"),
+        ("certifi",             "2023.11.17", "162 kB"),
+        ("charset-normalizer",  "3.3.2",   "138 kB"),
+        ("idna",                "3.6",     "62 kB"),
+        ("urllib3",             "2.1.0",   "101 kB"),
+        ("six",                 "1.16.0",  "12 kB"),
+        ("python-dateutil",     "2.8.2",   "236 kB"),
+        ("pytz",                "2023.3.post1", "2.2 MB"),
+        ("tzdata",              "2023.3",  "346 kB"),
+        ("annotated-types",     "0.6.0",   "17 kB"),
+        ("typing-extensions",   "4.9.0",   "74 kB"),
+        ("attrs",               "23.1.0",  "105 kB"),
+        ("iniconfig",           "2.0.0",   "11 kB"),
+        ("pluggy",              "1.3.0",   "20 kB"),
+        ("exceptiongroup",      "1.2.0",   "26 kB"),
+        ("tomli",               "2.0.1",   "34 kB"),
+        ("pathspec",            "0.11.2",  "39 kB"),
+        ("h11",                 "0.14.0",  "50 kB"),
+        ("httpcore",            "1.0.2",   "85 kB"),
+        ("socksio",             "1.0.0",   "11 kB"),
+    ];
+
+    let mut out = String::new();
+    out.push_str("Using CPython 3.11.6 interpreter at /usr/bin/python3.11\n");
+    out.push_str("Creating virtual environment at: .venv\n");
+    out.push_str(&format!("Resolved {} packages in 1.23s\n", packages.len()));
+    for (name, ver, size) in &packages {
+        // Alternate between Downloading, Fetching, Preparing
+        let verb = match name.len() % 3 {
+            0 => "Downloading",
+            1 => "Fetching",
+            _ => "Preparing",
+        };
+        out.push_str(&format!("   {} {}-{}.tar.gz ({})\n", verb, name, ver, size));
+    }
+    out.push_str(&format!("Installed {} packages in 14.3s\n", packages.len()));
+    out.push_str(&format!("Audited {} packages in 0.02s\n", packages.len()));
+    out
+}
+
+/// `ruff check` on a large Python codebase: 5 files, 80 violations.
+/// Mix of E501 (many per file), F401 (unused imports), E302, W291, B006.
+fn ruff_check_large() -> String {
+    let files = [
+        "src/api/views.py",
+        "src/api/serializers.py",
+        "src/models/user.py",
+        "src/models/order.py",
+        "src/utils/helpers.py",
+        "src/tasks/celery_tasks.py",
+        "src/middleware/auth.py",
+        "src/core/settings.py",
+        "tests/test_api.py",
+        "tests/test_models.py",
+    ];
+    let violations = [
+        ("E501", "Line too long ({} > 88 characters)"),
+        ("E501", "Line too long ({} > 88 characters)"),
+        ("E501", "Line too long ({} > 88 characters)"),
+        ("F401", "`os` imported but unused"),
+        ("F401", "`sys` imported but unused"),
+        ("W291", "Trailing whitespace"),
+        ("W291", "Trailing whitespace"),
+        ("E302", "Expected 2 blank lines, found 1"),
+        ("B006", "Do not use mutable data structures for argument defaults"),
+        ("E711", "Comparison to `None` (use `is` or `is not`)"),
+    ];
+    let mut out = String::new();
+    let mut line_no = 1usize;
+    for file in &files {
+        for (i, (code, msg_template)) in violations.iter().enumerate() {
+            let col = 1 + (i * 4 % 40);
+            let msg = if msg_template.contains("{}") {
+                msg_template.replace("{}", &format!("{}", 89 + i * 3))
+            } else {
+                msg_template.to_string()
+            };
+            out.push_str(&format!("{}:{}:{}: {} {}\n", file, line_no, col, code, msg));
+            line_no += 3;
+        }
+        line_no += 10;
+    }
+    out.push_str(&format!("Found {} errors.\n", files.len() * violations.len()));
+    out
+}
+
+/// `mypy` on a large Python service: 8 files, 60 type errors, daemon startup,
+/// notes interleaved, and summary.
+fn mypy_large() -> String {
+    let files = [
+        ("src/api/views.py",        12usize),
+        ("src/api/serializers.py",   8),
+        ("src/models/user.py",       6),
+        ("src/models/order.py",     15),   // exceeds MAX_ERRORS_PER_FILE cap
+        ("src/tasks/celery_tasks.py", 5),
+        ("src/utils/helpers.py",     4),
+        ("src/core/settings.py",     3),
+        ("tests/test_api.py",        7),
+    ];
+    let error_templates = [
+        (1,  "Argument 1 to \"filter\" has incompatible type \"Optional[str]\"; expected \"str\""),
+        (2,  "Item \"None\" of \"Optional[User]\" has no attribute \"id\""),
+        (3,  "Incompatible return value type (got \"None\", expected \"Response\")"),
+        (4,  "Cannot assign to a method  [method-assign]"),
+        (5,  "Missing return statement"),
+        (6,  "\"dict[str, Any]\" has no attribute \"get_or_create\""),
+        (7,  "Argument 1 to \"serialize\" has incompatible type \"int\"; expected \"str\""),
+        (8,  "Incompatible types in assignment (expression has type \"str\", variable has type \"int\")"),
+        (9,  "Module has no attribute \"celery_app\""),
+        (10, "Need type annotation for \"results\" (hint: \"results: List[<type>] = ...\")"),
+        (11, "Unsupported operand types for + (\"str\" and \"int\")"),
+        (12, "Value of type \"Optional[QuerySet]\" is not indexable"),
+        (13, "\"Callable[..., Any]\" not callable"),
+        (14, "Name \"config\" is not defined"),
+        (15, "Too many arguments for \"__init__\" of \"Model\""),
+    ];
+
+    let mut out = String::new();
+    out.push_str("Daemon started successfully\n");
+    let mut total_errors = 0usize;
+    for (file, count) in &files {
+        for i in 0..*count {
+            let line_no = 10 + i * 7;
+            let (_, msg) = error_templates[i % error_templates.len()];
+            out.push_str(&format!("{}:{}: error: {}  [misc]\n", file, line_no, msg));
+            // Interleave notes
+            if i % 3 == 0 {
+                out.push_str(&format!("{}:{}: note: See https://mypy.rtfd.io\n", file, line_no + 1));
+            }
+            total_errors += 1;
+        }
+    }
+    out.push_str(&format!(
+        "Found {} errors in {} files (checked 24 source files)\n",
+        total_errors,
+        files.len()
+    ));
+    out
+}
+
+/// `nx run-many --target=build,test,lint` across 20 packages.
+/// 17 passing (10 cached), 1 failing with real error output, 2 slow non-cached.
+fn nx_run_many_large() -> String {
+    let projects = [
+        "apps/web",      "apps/api",      "apps/admin",    "apps/mobile",
+        "libs/ui",       "libs/utils",    "libs/auth",     "libs/api-client",
+        "libs/db",       "libs/config",   "libs/testing",  "libs/i18n",
+        "libs/hooks",    "libs/types",    "libs/schemas",  "libs/validators",
+        "libs/services", "libs/analytics","libs/cache",    "libs/queue",
+    ];
+    let mut out = String::new();
+    out.push_str("   NX   Nx Cloud enabled\n");
+    out.push_str("\n");
+    out.push_str("   NX   Running target build for 20 projects and 1 task they depend on...\n");
+    out.push_str("\n");
+
+    for (i, project) in projects.iter().enumerate() {
+        out.push_str(&"─".repeat(60));
+        out.push_str("\n");
+        // First project is the failing one
+        if i == 0 {
+            out.push_str(&format!("> nx run {}:build\n", project));
+            out.push_str("\n");
+            out.push_str("  vite v5.0.8 building for production...\n");
+            out.push_str("  transforming...\n");
+            out.push_str("  ERROR: Build failed with errors.\n");
+            out.push_str("  error during build:\n");
+            out.push_str("  RollupError: Could not resolve \"@libs/missing\" from \"src/App.tsx\"\n");
+            out.push_str("    at getRollupEror (node_modules/rollup/dist/shared/rollup.js:198:19)\n");
+            out.push_str("    at error (node_modules/rollup/dist/shared/rollup.js:195:24)\n");
+            out.push_str("    at ModuleLoader.resolveId (node_modules/rollup/dist/shared/rollup.js:22610:13)\n");
+        } else {
+            // Cached for first 10 passing, non-cached for remaining
+            let cached = i <= 10;
+            out.push_str(&format!("> nx run {}:build{}\n", project, if cached { " [local cache]" } else { "" }));
+            out.push_str("\n");
+            if cached {
+                out.push_str("  Nx read the output from the cache instead of running the command for 1 out of 1 tasks.\n");
+            } else {
+                out.push_str("  vite v5.0.8 building for production...\n");
+                out.push_str("  transforming (342 modules)...\n");
+                out.push_str(&format!("  ✓ {} modules transformed.\n", 200 + i * 12));
+                out.push_str(&format!("  dist/{}/assets/index-Dh3GX4nq.js    {:>6} kB │ gzip: {:>5} kB\n",
+                    project.replace('/', "-"), 284 + i, 91 + i));
+                out.push_str(&format!("  dist/{}/index.html                       0.46 kB │ gzip:  0.30 kB\n",
+                    project.replace('/', "-")));
+                out.push_str("  ✓ built in 2.47s\n");
+            }
+        }
+        out.push_str("\n");
+    }
+
+    out.push_str(&"─".repeat(60));
+    out.push_str("\n\n");
+    out.push_str(" NX   Failed to run target build for project apps/web\n\n");
+    out.push_str("   Ran 20 tasks\n\n");
+    out.push_str("   1 failed\n");
+    out.push_str("   19 succeeded\n");
+    out
+}
+
+// ─── New handler benchmarks ───────────────────────────────────────────────────
+
+#[test]
+fn benchmark_uv_install() {
+    let input = uv_install_large();
+    let in_tok = count_tokens(&input);
+
+    let handler = UvHandler;
+    let out = handler.filter(&input, &["uv".to_string(), "sync".to_string()]);
+    let out_tok = count_tokens(&out);
+
+    println!();
+    println!("── uv sync (87 packages, large Django+ML project) ──");
+    println!("{:<30} {:>12} {:>10} {:>10}", "Pass", "Without CCR", "With CCR", "Savings");
+    println!("{}", "─".repeat(66));
+    println!("{:<30} {:>12} {:>10} {:>9.0}%",
+        "UvHandler", in_tok, out_tok, savings_pct(in_tok, out_tok));
+    println!();
+    println!("Output:\n{}", out);
+
+    assert!(out.contains("Installed"), "install summary must be present");
+    assert!(!out.contains("Downloading"), "download lines must be stripped");
+    assert!(!out.contains("CPython"), "python version line must be stripped");
+    assert!(
+        savings_pct(in_tok, out_tok) >= 85.0,
+        "expected ≥85% savings on uv sync output, got {:.0}%",
+        savings_pct(in_tok, out_tok)
+    );
+}
+
+#[test]
+fn benchmark_ruff_check() {
+    let input = ruff_check_large();
+    let in_tok = count_tokens(&input);
+
+    let handler = RuffHandler;
+    let out = handler.filter(&input, &["ruff".to_string(), "check".to_string()]);
+    let out_tok = count_tokens(&out);
+
+    println!();
+    println!("── ruff check (10 files, 100 violations, 8 distinct codes) ──");
+    println!("{:<30} {:>12} {:>10} {:>10}", "Pass", "Without CCR", "With CCR", "Savings");
+    println!("{}", "─".repeat(66));
+    println!("{:<30} {:>12} {:>10} {:>9.0}%",
+        "RuffHandler", in_tok, out_tok, savings_pct(in_tok, out_tok));
+    println!();
+    println!("Output:\n{}", out);
+
+    assert!(out.contains("E501"), "E501 violations must be present");
+    assert!(out.contains("F401"), "F401 violations must be present");
+    assert!(
+        savings_pct(in_tok, out_tok) >= 50.0,
+        "expected ≥50% savings on ruff output, got {:.0}%",
+        savings_pct(in_tok, out_tok)
+    );
+}
+
+#[test]
+fn benchmark_mypy() {
+    let input = mypy_large();
+    let in_tok = count_tokens(&input);
+
+    let handler = MypyHandler;
+    let out = handler.filter(&input, &[]);
+    let out_tok = count_tokens(&out);
+
+    println!();
+    println!("── mypy (8 files, 60 errors, notes interleaved, daemon startup) ──");
+    println!("{:<30} {:>12} {:>10} {:>10}", "Pass", "Without CCR", "With CCR", "Savings");
+    println!("{}", "─".repeat(66));
+    println!("{:<30} {:>12} {:>10} {:>9.0}%",
+        "MypyHandler", in_tok, out_tok, savings_pct(in_tok, out_tok));
+    println!();
+    println!("Output:\n{}", out);
+
+    assert!(!out.contains("Daemon"), "daemon startup line must be stripped");
+    assert!(!out.contains(": note:"), "note lines must be stripped");
+    assert!(out.contains("Found"), "summary line must be present");
+    assert!(out.contains("more errors"), "per-file cap must be applied");
+    assert!(
+        savings_pct(in_tok, out_tok) >= 40.0,
+        "expected ≥40% savings on mypy output, got {:.0}%",
+        savings_pct(in_tok, out_tok)
+    );
+}
+
+#[test]
+fn benchmark_nx_run_many() {
+    let input = nx_run_many_large();
+    let in_tok = count_tokens(&input);
+
+    let handler = NxHandler;
+    let out = handler.filter(&input, &["nx".to_string(), "run-many".to_string()]);
+    let out_tok = count_tokens(&out);
+
+    println!();
+    println!("── nx run-many (20 projects, 1 failing, 10 cached) ──");
+    println!("{:<30} {:>12} {:>10} {:>10}", "Pass", "Without CCR", "With CCR", "Savings");
+    println!("{}", "─".repeat(66));
+    println!("{:<30} {:>12} {:>10} {:>9.0}%",
+        "NxHandler", in_tok, out_tok, savings_pct(in_tok, out_tok));
+    println!();
+    println!("Output:\n{}", out);
+
+    assert!(!out.contains("Nx Cloud"), "Nx Cloud banner must be stripped");
+    assert!(out.contains("apps/web:build"), "failing task must be preserved");
+    assert!(out.contains("RollupError"), "error details must be preserved");
+    assert!(out.contains("cached"), "cache stats must be present");
+    assert!(
+        savings_pct(in_tok, out_tok) >= 70.0,
+        "expected ≥70% savings on nx run-many output, got {:.0}%",
+        savings_pct(in_tok, out_tok)
+    );
 }

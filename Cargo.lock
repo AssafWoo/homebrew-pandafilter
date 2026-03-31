@@ -351,7 +351,7 @@ dependencies = [
 
 [[package]]
 name = "ccr"
-version = "0.5.15"
+version = "0.5.22"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -360,6 +360,7 @@ dependencies = [
  "ccr-sdk",
  "clap",
  "dirs 5.0.1",
+ "once_cell",
  "owo-colors",
  "predicates",
  "regex",

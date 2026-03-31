@@ -24,15 +24,19 @@ pub mod kubectl;
 pub mod ls;
 pub mod make;
 pub mod maven;
+pub mod mypy;
 pub mod next;
 pub mod npm;
+pub mod nx;
 pub mod pip;
 pub mod playwright;
 pub mod pnpm;
 pub mod prettier;
 pub mod prisma;
+pub mod ruff;
 pub mod stylelint;
 pub mod turbo;
+pub mod uv;
 pub mod vite;
 pub mod webpack;
 pub mod psql;
@@ -94,7 +98,10 @@ fn get_handler_exact(cmd: &str) -> Option<Box<dyn Handler>> {
         "eslint" => Some(Box::new(eslint::EslintHandler)),
         // Batch 2: Python
         "pytest" => Some(Box::new(pytest::PytestHandler)),
-        "pip" | "pip3" | "uv" => Some(Box::new(pip::PipHandler)),
+        "pip" | "pip3" => Some(Box::new(pip::PipHandler)),
+        "uv" => Some(Box::new(uv::UvHandler)),
+        "ruff" => Some(Box::new(ruff::RuffHandler)),
+        "mypy" | "mypy3" => Some(Box::new(mypy::MypyHandler)),
         "python" | "python3" => Some(Box::new(python::PythonHandler)),
         // Batch 3: DevOps / Cloud
         "kubectl" => Some(Box::new(kubectl::KubectlHandler)),
@@ -124,7 +131,8 @@ fn get_handler_exact(cmd: &str) -> Option<Box<dyn Handler>> {
         "prisma" => Some(Box::new(prisma::PrismaHandler)),
         "golangci-lint" | "golangci_lint" => Some(Box::new(golangci_lint::GolangCiLintHandler)),
         "prettier" => Some(Box::new(prettier::PrettierHandler)),
-        // Frontend build tools
+        // Frontend build tools / monorepo runners
+        "nx" => Some(Box::new(nx::NxHandler)),
         "vite" => Some(Box::new(vite::ViteHandler)),
         "webpack" | "webpack-cli" => Some(Box::new(webpack::WebpackHandler)),
         "turbo" => Some(Box::new(turbo::TurboHandler)),
@@ -148,13 +156,15 @@ const STATIC_ALIASES: &[(&str, &str)] = &[
     // pip variants
     ("pip3.9",  "pip"), ("pip3.10", "pip"), ("pip3.11", "pip"), ("pip3.12", "pip"),
     ("poetry",  "pip"), ("pdm",     "pip"), ("conda",   "pip"),
+    // uv variants
+    ("uvx",     "uv"),
     // pytest variants
     ("py.test",  "pytest"), ("pytest3", "pytest"),
     // JS runtimes that run jest-style tests
     ("bun",  "jest"),
     ("deno", "jest"),
     // Build / task runners
-    ("nx",          "jest"),   // nx test runs jest under the hood
+    ("npx nx",      "nx"),
     ("./gradlew",   "gradle"), ("gradlew",   "gradle"),
     ("./mvnw",      "mvn"),    ("mvnw",      "mvn"),
     ("ninja",       "make"),   ("bmake",     "make"),
@@ -249,6 +259,10 @@ const HANDLER_REPS: &[(&str, &str)] = &[
     ("clippy warning lint rust",        "clippy"),
     ("json parse schema object array",  "json"),
     ("log output lines errors warnings","log"),
+    ("uv install add sync lock venv",   "uv"),
+    ("ruff check format lint python",   "ruff"),
+    ("mypy type check error annotation","mypy"),
+    ("nx run build test affected graph","nx"),
 ];
 
 const BERT_THRESHOLD_HIGH: f32 = 0.70;  // Full handler (filter + rewrite_args)
