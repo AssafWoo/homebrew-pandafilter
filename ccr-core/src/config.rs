@@ -67,6 +67,21 @@ pub struct GlobalConfig {
     /// Example: cost_per_million_tokens = 15.0  # for Opus
     #[serde(default)]
     pub cost_per_million_tokens: Option<f64>,
+    /// Hard ceiling on raw input bytes before any pipeline stage.
+    /// 0 = disabled. Default 200_000 (~50K tokens).
+    #[serde(default = "default_input_char_ceiling")]
+    pub input_char_ceiling: usize,
+    /// Hard cap on pipeline output chars. 0 = disabled. Default 50_000.
+    #[serde(default = "default_output_char_cap")]
+    pub output_char_cap: usize,
+}
+
+fn default_input_char_ceiling() -> usize {
+    200_000
+}
+
+fn default_output_char_cap() -> usize {
+    50_000
 }
 
 fn default_bert_model() -> String {
@@ -93,6 +108,8 @@ impl Default for GlobalConfig {
             bert_model: default_bert_model(),
             state_commands: default_state_commands(),
             cost_per_million_tokens: None,
+            input_char_ceiling: default_input_char_ceiling(),
+            output_char_cap: default_output_char_cap(),
         }
     }
 }

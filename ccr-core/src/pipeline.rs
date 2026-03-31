@@ -34,6 +34,35 @@ pub struct Pipeline {
     pub config: CcrConfig,
 }
 
+/// Truncate `text` to at most `max_chars` chars (UTF-8 safe).
+/// Appends a one-line marker with the original size.
+fn truncate_to_char_ceiling(text: &str, max_chars: usize) -> String {
+    let byte_limit = text
+        .char_indices()
+        .take_while(|(i, _)| *i < max_chars)
+        .last()
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    let kept_kb = byte_limit / 1024;
+    let total_kb = text.len() / 1024;
+    format!(
+        "{}\n[--- input truncated: kept {}k of {}k chars ---]",
+        &text[..byte_limit], kept_kb, total_kb
+    )
+}
+
+/// Cap `text` to at most `max_chars` chars (UTF-8 safe).
+/// Appends a one-line marker.
+fn cap_output_chars(text: &str, max_chars: usize) -> String {
+    let byte_limit = text
+        .char_indices()
+        .take_while(|(i, _)| *i < max_chars)
+        .last()
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    format!("{}\n[--- output capped at {}k chars ---]", &text[..byte_limit], max_chars / 1024)
+}
+
 fn head_tail_truncate(text: &str, head: usize, tail: usize) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let total = lines.len();
@@ -67,6 +96,18 @@ impl Pipeline {
         historical_centroid: Option<&[f32]>,
     ) -> anyhow::Result<PipelineResult> {
         let input_tokens = count_tokens(input);
+
+        // Stage 0: hard input ceiling (before any pipeline stage)
+        let ceiling_buf: String;
+        let input: &str = {
+            let ceiling = self.config.global.input_char_ceiling;
+            if ceiling > 0 && input.len() > ceiling {
+                ceiling_buf = truncate_to_char_ceiling(input, ceiling);
+                &ceiling_buf
+            } else {
+                input
+            }
+        };
 
         let mut text = input.to_string();
 
@@ -164,6 +205,12 @@ impl Pipeline {
                     };
                 }
             }
+        }
+
+        // Final stage: hard output cap
+        let cap = self.config.global.output_char_cap;
+        if cap > 0 && text.len() > cap {
+            text = cap_output_chars(&text, cap);
         }
 
         let output_tokens = count_tokens(&text);
@@ -366,5 +413,88 @@ mod tests {
         // 15 lines <= 20 budget, no truncation
         assert!(!result.contains("more lines"));
         assert_eq!(result.lines().count(), 15);
+    }
+
+    #[test]
+    fn input_ceiling_truncates_large_input() {
+        let mut config = CcrConfig::default();
+        config.global.input_char_ceiling = 100;
+        let pipeline = Pipeline::new(config);
+        let input = "x".repeat(500);
+        let result = pipeline.process(&input, None, None, None).unwrap();
+        assert!(result.output.contains("input truncated"));
+        assert!(result.output.len() < 200);
+    }
+
+    #[test]
+    fn input_ceiling_zero_disables() {
+        let mut config = CcrConfig::default();
+        config.global.input_char_ceiling = 0;
+        let pipeline = Pipeline::new(config);
+        let input = "x".repeat(500);
+        let result = pipeline.process(&input, None, None, None).unwrap();
+        assert!(!result.output.contains("input truncated"));
+    }
+
+    #[test]
+    fn input_ceiling_passthrough_when_under() {
+        let pipeline = Pipeline::new(CcrConfig::default());
+        let input = "short input";
+        let result = pipeline.process(input, None, None, None).unwrap();
+        assert!(!result.output.contains("input truncated"));
+    }
+
+    #[test]
+    fn input_ceiling_utf8_safe() {
+        let mut config = CcrConfig::default();
+        config.global.input_char_ceiling = 10;
+        let pipeline = Pipeline::new(config);
+        // "é" = 2 bytes; 7 of them = 14 bytes > 10 byte ceiling
+        let input = "é".repeat(7);
+        let result = pipeline.process(&input, None, None, None).unwrap();
+        // Must not panic and output must be valid UTF-8
+        assert!(std::str::from_utf8(result.output.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn output_cap_truncates_large_output() {
+        let mut config = CcrConfig::default();
+        config.global.output_char_cap = 50;
+        config.global.summarize_threshold_lines = 1000; // disable BERT for this test
+        let pipeline = Pipeline::new(config);
+        let input: String = (0..10).map(|i| format!("line {}\n", i)).collect();
+        let result = pipeline.process(&input, None, None, None).unwrap();
+        assert!(result.output.contains("output capped"));
+        assert!(result.output.len() < 120);
+    }
+
+    #[test]
+    fn output_cap_zero_disables() {
+        let mut config = CcrConfig::default();
+        config.global.output_char_cap = 0;
+        config.global.summarize_threshold_lines = 1000;
+        let pipeline = Pipeline::new(config);
+        let input = "hello world\nfoo bar\n";
+        let result = pipeline.process(&input, None, None, None).unwrap();
+        assert!(!result.output.contains("output capped"));
+    }
+
+    #[test]
+    fn output_cap_passthrough_when_under() {
+        let pipeline = Pipeline::new(CcrConfig::default());
+        let input = "short output line\n";
+        let result = pipeline.process(input, None, None, None).unwrap();
+        assert!(!result.output.contains("output capped"));
+    }
+
+    #[test]
+    fn output_cap_fires_after_bert() {
+        let mut config = CcrConfig::default();
+        config.global.summarize_threshold_lines = 2;
+        config.global.output_char_cap = 30;
+        let pipeline = Pipeline::new(config);
+        let input: String = (0..60).map(|i| format!("log line number {} with some content\n", i)).collect();
+        let result = pipeline.process(&input, None, None, None).unwrap();
+        assert!(result.output.contains("output capped") || result.output.len() <= 60);
     }
 }

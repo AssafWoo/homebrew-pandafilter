@@ -134,6 +134,25 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     let sid = crate::session::session_id();
     let mut session = crate::session::SessionState::load(&sid);
 
+    // RC: result cache — return byte-identical output on hit (prompt cache stability)
+    let rc_key = crate::result_cache::ResultCache::compute_key(&output_text, command_hint.as_deref());
+    {
+        let mut rc = crate::result_cache::ResultCache::load(&sid);
+        rc.evict_old();
+        if let Some(entry) = rc.lookup(&rc_key) {
+            let cached_output = entry.output.clone();
+            let analytics = ccr_core::analytics::Analytics::new_cache_hit(
+                entry.input_tokens,
+                entry.output_tokens,
+                command_hint.clone(),
+                None,
+            );
+            crate::util::append_analytics(&analytics);
+            let hook_output = HookOutput { output: cached_output };
+            return Ok(Some(serde_json::to_string(&hook_output)?));
+        }
+    }
+
     // cmd_key for session tracking: skip leading KEY=VALUE env vars and wrapper prefix.
     // "GIT_COMMITTER_NAME=Assaf git commit -m foo" → "git commit"
     // "rtk git status" → "git status"
@@ -287,6 +306,12 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         None,
     );
     crate::util::append_analytics(&analytics);
+
+    {
+        let mut rc = crate::result_cache::ResultCache::load(&sid);
+        rc.insert(rc_key, final_output.clone(), input_tokens, output_tokens);
+        rc.save(&sid);
+    }
 
     let hook_output = HookOutput { output: final_output };
     Ok(Some(serde_json::to_string(&hook_output)?))

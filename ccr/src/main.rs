@@ -7,6 +7,7 @@ mod hook;
 mod intent;
 mod noise_learner;
 mod pre_cache;
+mod result_cache;
 mod session;
 mod user_filters;
 mod util;
@@ -27,7 +28,7 @@ enum Commands {
         #[arg(long)]
         command: Option<String>,
     },
-    /// Show token savings analytics (per-command breakdown)
+    /// Show token savings analytics
     Gain {
         /// Show per-day history instead of overall summary
         #[arg(long)]
@@ -35,6 +36,9 @@ enum Commands {
         /// Number of days to include in the history view
         #[arg(long, default_value = "14")]
         days: u32,
+        /// Show per-command breakdown table
+        #[arg(long)]
+        breakdown: bool,
     },
     /// PostToolUse hook mode for Claude Code (hidden)
     #[command(hide = true)]
@@ -124,7 +128,7 @@ fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
         Commands::Filter { command } => cmd::filter::run(command),
-        Commands::Gain { history, days } => cmd::gain::run(history, days),
+        Commands::Gain { history, days, breakdown } => cmd::gain::run(history, days, breakdown),
         Commands::Hook => hook::run(),
         Commands::Init { uninstall } => if uninstall { uninstall_ccr() } else { init() },
         Commands::Run { args } => cmd::run::run(args),

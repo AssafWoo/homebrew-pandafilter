@@ -41,13 +41,13 @@ fn resolve_price() -> (f64, String) {
     (3.00 / 1_000_000.0, "$3.00/1M (set ANTHROPIC_MODEL to auto-detect)".to_string())
 }
 
-pub fn run(history: bool, days: u32) -> Result<()> {
+pub fn run(history: bool, days: u32, breakdown: bool) -> Result<()> {
     let records = load_records()?;
 
     if history {
         print_history(&records, days);
     } else {
-        print_summary(&records);
+        print_summary(&records, breakdown);
     }
 
     Ok(())
@@ -76,7 +76,7 @@ fn load_records() -> Result<Vec<Analytics>> {
 
 // ─── Summary view (default) ────────────────────────────────────────────────────
 
-fn print_summary(records: &[Analytics]) {
+fn print_summary(records: &[Analytics], breakdown: bool) {
     // Split legacy (timestamp=0) records from dated ones.
     // Legacy records have no timestamp and cannot be placed in any date window.
     let (legacy, dated): (Vec<&Analytics>, Vec<&Analytics>) =
@@ -212,81 +212,85 @@ fn print_summary(records: &[Analytics]) {
         return;
     }
 
-    // ── Per-command table ──
-    println!();
-    println!("{}", "Per-Command Breakdown".if_supports_color(Stdout, |t| t.bold()));
+    // ── Per-command table (only with --breakdown) ──
+    if breakdown {
+        println!();
+        println!("{}", "Per-Command Breakdown".if_supports_color(Stdout, |t| t.bold()));
 
-    // Group: cmd -> (input, output, count, total_duration_ms, duration_count)
-    let mut by_cmd: BTreeMap<String, CmdStats> = BTreeMap::new();
-
-    for r in records {
-        let key = normalize_cmd_key(r.command.as_deref());
-        let entry = by_cmd.entry(key).or_default();
-        entry.input += r.input_tokens;
-        entry.output += r.output_tokens;
-        entry.count += 1;
-        if let Some(ms) = r.duration_ms {
-            entry.total_ms += ms;
-            entry.ms_count += 1;
+        let mut by_cmd: BTreeMap<String, CmdStats> = BTreeMap::new();
+        for r in records {
+            let key = normalize_cmd_key(r.command.as_deref());
+            let entry = by_cmd.entry(key).or_default();
+            entry.input += r.input_tokens;
+            entry.output += r.output_tokens;
+            entry.count += 1;
+            if let Some(ms) = r.duration_ms {
+                entry.total_ms += ms;
+                entry.ms_count += 1;
+            }
         }
-    }
 
-    let mut rows: Vec<(String, CmdStats)> = by_cmd.into_iter().collect();
-    // Sort by tokens saved descending
-    rows.sort_by(|a, b| b.1.saved().cmp(&a.1.saved()));
+        let mut rows: Vec<(String, CmdStats)> = by_cmd.into_iter().collect();
+        rows.sort_by(|a, b| b.1.saved().cmp(&a.1.saved()));
 
-    let col_w = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(7).max(7);
-    let sep = "─".repeat(col_w + 51);
-    println!("{}", sep.if_supports_color(Stdout, |t| t.dimmed()));
-    println!(
-        "{}",
-        format!(
-            "{:<col_w$} {:>6}  {:>10}  {:>8}  {:>7}  {}",
-            "COMMAND", "RUNS", "SAVED", "SAVINGS", "AVG ms", "IMPACT",
-            col_w = col_w
-        )
-        .if_supports_color(Stdout, |t| t.bold())
-    );
-    println!("{}", sep.if_supports_color(Stdout, |t| t.dimmed()));
-
-    for (cmd, stats) in &rows {
-        let pct = savings_pct(stats.input, stats.output);
-        let avg_ms = if stats.ms_count > 0 {
-            format!("{:>6}", stats.total_ms / stats.ms_count)
-        } else {
-            "     —".to_string()
-        };
-        let bar_len = (pct / 5.0) as usize;
-        let bar = "█".repeat(bar_len.min(20));
-        let dim_row = pct < 1.0;
-        let bar_colored = if pct >= 40.0 {
-            bar.if_supports_color(Stdout, |t| t.green()).to_string()
-        } else if pct >= 15.0 {
-            bar.if_supports_color(Stdout, |t| t.yellow()).to_string()
-        } else {
-            bar.if_supports_color(Stdout, |t| t.dimmed()).to_string()
-        };
-        let line = format!(
-            "{:<col_w$} {:>6}  {:>10}  {:>7.1}%  {}  {}",
-            cmd,
-            stats.count,
-            fmt_tokens(stats.saved()),
-            pct,
-            avg_ms,
-            bar_colored,
-            col_w = col_w
+        let col_w = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(7).max(7);
+        let sep = "─".repeat(col_w + 51);
+        println!("{}", sep.if_supports_color(Stdout, |t| t.dimmed()));
+        println!(
+            "{}",
+            format!(
+                "{:<col_w$} {:>6}  {:>10}  {:>8}  {:>7}  {}",
+                "COMMAND", "RUNS", "SAVED", "SAVINGS", "AVG ms", "IMPACT",
+                col_w = col_w
+            )
+            .if_supports_color(Stdout, |t| t.bold())
         );
-        if dim_row {
-            println!("{}", line.if_supports_color(Stdout, |t| t.dimmed()));
-        } else {
-            println!("{}", line);
+        println!("{}", sep.if_supports_color(Stdout, |t| t.dimmed()));
+
+        for (cmd, stats) in &rows {
+            let pct = savings_pct(stats.input, stats.output);
+            let avg_ms = if stats.ms_count > 0 {
+                format!("{:>6}", stats.total_ms / stats.ms_count)
+            } else {
+                "     —".to_string()
+            };
+            let bar_len = (pct / 5.0) as usize;
+            let bar = "█".repeat(bar_len.min(20));
+            let dim_row = pct < 1.0;
+            let bar_colored = if pct >= 40.0 {
+                bar.if_supports_color(Stdout, |t| t.green()).to_string()
+            } else if pct >= 15.0 {
+                bar.if_supports_color(Stdout, |t| t.yellow()).to_string()
+            } else {
+                bar.if_supports_color(Stdout, |t| t.dimmed()).to_string()
+            };
+            let line = format!(
+                "{:<col_w$} {:>6}  {:>10}  {:>7.1}%  {}  {}",
+                cmd,
+                stats.count,
+                fmt_tokens(stats.saved()),
+                pct,
+                avg_ms,
+                bar_colored,
+                col_w = col_w
+            );
+            if dim_row {
+                println!("{}", line.if_supports_color(Stdout, |t| t.dimmed()));
+            } else {
+                println!("{}", line);
+            }
         }
+    } else {
+        println!(
+            "  {}",
+            "Run `ccr gain --breakdown` for per-command details."
+                .if_supports_color(Stdout, |t| t.dimmed()),
+        );
     }
 
     // ── Missed opportunities (from discover) ──
     let opportunities = crate::cmd::discover::top_unoptimized(5);
     if !opportunities.is_empty() {
-        // Only show if there are meaningful savings (at least 2k tokens potential)
         let total_potential: usize = opportunities.iter().map(|(_, t)| t).sum();
         if total_potential >= 2_000 {
             println!();

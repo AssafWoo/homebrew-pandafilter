@@ -52,11 +52,10 @@ Numbers from `ccr/tests/handler_benchmarks.rs` — each handler fed a realistic 
 | **Total** | **69,727** | **15,846** | **−77%** |
 
 **Notes:**
-- For `cargo build` / `cargo test`: "without CCR" is standard human-readable output; CCR injects `--message-format json` to extract structured errors.
-- For `git status` / `git log`: "without CCR" is the full verbose format; CCR injects `--porcelain` / `--oneline` before running.
-- `git diff` fixture is a 10-file refactoring diff; context lines trimmed to 2 per side, total capped at 200.
-- `gradle build` collapses UP-TO-DATE task lines into a single count — savings scale with subproject count.
-- `tsc` groups errors by file and truncates verbose type messages; savings scale with error count.
+- `cargo build` / `cargo test`: CCR injects `--message-format json` to extract structured errors.
+- `git status` / `git log`: CCR injects `--porcelain` / `--oneline` before running.
+- `git diff`: 10-file refactoring fixture; context lines trimmed to 2 per side, total capped at 200.
+- `gradle build`: UP-TO-DATE tasks collapsed — savings scale with subproject count.
 - Run `ccr gain` after any session to see your real numbers.
 
 ---
@@ -75,6 +74,7 @@ Numbers from `ccr/tests/handler_benchmarks.rs` — each handler fed a realistic 
 - [Session Intelligence](#session-intelligence)
 - [Hook Architecture](#hook-architecture)
 - [Crate Overview](#crate-overview)
+- [Claude Code Source Findings](#claude-code-source-findings)
 
 ---
 
@@ -108,45 +108,26 @@ CCR is a local-only tool. It never sends data anywhere.
 | Claude's last message (BERT only) | The single most-recent message in the active session | Used as a relevance query so compression keeps lines relevant to your current task — read-only, never stored |
 | Conversation files (`ccr discover` only) | Local JSONL files Claude Code writes to `~/.claude/` | Find which commands ran without a handler — **opt-in, never automatic** |
 
-The hook **never reads your prompts or full conversation history.** It sees command output (same bytes as your terminal) and, when BERT compression runs, your single latest message as a relevance signal. Everything stays on your machine. `ccr discover` is an optional analytics command you can ignore entirely.
+The hook **never reads your prompts or full conversation history.** Everything stays on your machine.
 
 ---
 
 ## FAQ
 
-**Does CCR read my prompts or conversation history?**
-No. The hook only sees the output of shell commands (stdout/stderr) — the same bytes you'd read in your terminal. It never touches your prompts, Claude's replies, or conversation history.
-
-**Does CCR send any data outside my machine?**
-Never. All processing is fully local. BERT runs on-device using a small embedded model. Nothing is sent to any server.
-
-**BERT uses my "last message" — what exactly does that mean?**
-When compressing large output, CCR reads your single most-recent message from the local session file Claude Code maintains on disk. It's used as a relevance query so the compression keeps lines related to what you're working on. It's read-only, used only in that moment, and never stored or logged anywhere.
-
 **Does CCR degrade Claude's output quality?**
-No. CCR only removes noise from tool output — build logs, module graphs, passing test lines, progress bars. The signal Claude needs (errors, file paths, summaries) is always kept. Claude sees a cleaner view of what happened, which if anything improves focus. Several users have run extended sessions without noticing any degradation.
+No. CCR only removes noise from tool output — build logs, module graphs, passing test lines, progress bars. The signal Claude needs (errors, file paths, summaries) is always kept.
 
 **What happens with a tool CCR doesn't know about?**
 It goes through BERT semantic routing — the command name is compared against all known handlers by similarity. If confidence is high enough the closest handler is applied; if nothing matches the output passes through unchanged. CCR never silently drops output.
 
 **How do I verify it's working?**
-Run `ccr gain` after a session to see per-command token counts and total savings. To inspect what Claude actually receives from a specific command:
+Run `ccr gain` after a session. To inspect what Claude actually receives from a specific command:
 ```bash
 ccr proxy git log --oneline -20
 ```
 
-**What makes CCR different from rule-based proxies:**
-
-- **50 handlers (60+ aliases)** — purpose-built filters for common dev tools (cargo, git, kubectl, gh, terraform, pytest, tsc, vite, webpack, turbo, biome, uv, ruff, mypy, nx, …)
-- **Global regex pre-filter** — strips progress bars, spinners, download lines, and decorators before BERT even loads
-- **BERT semantic routing** — unknown commands matched to nearest handler via sentence embeddings, with confidence tiers and margin gating
-- **Intent-aware compression** — uses Claude's last message as the BERT query so output relevant to the current task scores highest
-- **Noise learning** — learns which lines are boilerplate in your project and pre-filters them before BERT runs
-- **Pre-run cache** — git commands with identical repo state return cached output instantly
-- **Read/Glob compression** — file reads ≥50 lines and large glob listings go through BERT compression too
-- **Session dedup** — identical outputs across turns collapse to a single reference line
-- **Elastic context** — pipeline tightens automatically as the session fills up
-- **User-defined filters** — declarative TOML rules per command, no code needed
+**Does CCR send any data outside my machine?**
+Never. All processing is fully local. BERT runs on-device using a small embedded model.
 
 ---
 
@@ -178,6 +159,7 @@ The script installs Rust via `rustup` if needed, builds CCR from source with `ca
 
 ```bash
 ccr gain                    # overall summary
+ccr gain --breakdown        # include per-command table
 ccr gain --history          # last 14 days
 ccr gain --history --days 7
 ```
@@ -190,22 +172,10 @@ CCR Token Savings
   Cost saved:     ~$0.099  (at $3.00/1M)
   Today:          142 runs · 6.8k saved · 23.9%
   Top command:    (pipeline)  65.2%  ·  25.8k saved
-
-Per-Command Breakdown
-─────────────────────────────────────────────────────────────
-COMMAND      RUNS       SAVED   SAVINGS   AVG ms  IMPACT
-─────────────────────────────────────────────────────────────
-(pipeline)    112       25.8k     65.2%       —  █████████████
-rustfmt         2        2.3k     56.8%       —  ███████████
-...
-
-Unoptimized Commands
-  Run `ccr discover` for full details · ~18.3k tokens potential
-  cargo         ~8.2k saveable
-  git           ~6.1k saveable
+  Run `ccr gain --breakdown` for per-command details.
 ```
 
-If unoptimized commands are detected in your Claude Code history, they appear at the bottom with estimated savings. Pricing uses `cost_per_million_tokens` from `ccr.toml` if set, otherwise `ANTHROPIC_MODEL` env var (Opus 4.6: $15, Sonnet 4.6: $3, Haiku 4.5: $0.80), otherwise $3.00.
+`ccr gain --breakdown` adds a per-command table sorted by tokens saved. Pricing uses `cost_per_million_tokens` from `ccr.toml` if set, otherwise `ANTHROPIC_MODEL` env var (Opus 4.6: $15, Sonnet 4.6: $3, Haiku 4.5: $0.80), otherwise $3.00.
 
 ### ccr discover
 
@@ -213,7 +183,7 @@ If unoptimized commands are detected in your Claude Code history, they appear at
 ccr discover
 ```
 
-Scans `~/.claude/projects/*/` JSONL history for Bash commands that ran without CCR. Reports estimated missed savings sorted by impact. Commands already measured through CCR show actual savings ratios; others use handler-specific estimates.
+Scans `~/.claude/projects/*/` JSONL history for Bash commands that ran without CCR. Reports estimated missed savings sorted by impact.
 
 ### ccr compress
 
@@ -224,9 +194,7 @@ ccr compress conversation.json -o out.json
 cat conversation.json | ccr compress -
 ```
 
-Finds the most recently modified conversation JSONL under `~/.claude/projects/`, runs tiered compression (recent turns preserved verbatim, older turns compressed), and reports `tokens_in → tokens_out`.
-
-`--dry-run` estimates savings without writing output. `--scan-session` auto-locates the current conversation file. When context pressure is high, the hook suggests: `ccr compress --scan-session --dry-run`.
+Finds the most recently modified conversation JSONL under `~/.claude/projects/`, runs tiered compression (recent turns preserved verbatim, older turns compressed), and reports `tokens_in → tokens_out`. `--dry-run` estimates without writing. When context pressure is high, the hook suggests: `ccr compress --scan-session --dry-run`.
 
 ### ccr init
 
@@ -250,14 +218,6 @@ ccr expand --list     # list all available IDs in this session
 
 When CCR collapses output, it embeds an ID: `[5 lines collapsed — ccr expand ZI_3]`
 
-### ccr update
-
-```bash
-ccr update
-```
-
-Checks the latest release on GitHub and replaces the binary in-place if a newer version is available. Also re-runs `ccr init`.
-
 ### ccr filter / ccr run / ccr proxy
 
 ```bash
@@ -279,73 +239,73 @@ ccr proxy git status  # run raw (no filtering), record analytics baseline
 
 **TypeScript / JavaScript**
 
-| Handler | Keys | Savings | Key behavior |
-|---------|------|---------|-------------|
-| **tsc** | `tsc` | ~50% | Groups errors by file; deduplicates repeated TS codes; truncates verbose type messages. `Build OK` on clean. |
-| **vitest** | `vitest` | ~84% | FAIL blocks + summary; drops `✓` lines. |
-| **jest** | `jest`, `bun`, `deno` | ~65% | `●` failure blocks + summary; drops `PASS` lines. |
-| **nx** | `nx`, `npx nx` | ~82% | `run-many`/`affected`: passing tasks collapsed to `[N tasks passed (N cached)]`; failing task output + error preserved verbatim. Injects `--output-style=stream`. |
-| **eslint** | `eslint` | ~78% | Errors grouped by file, caps at 20 + `[+N more]`. |
-| **next** | `next` | ~90% | `build`: route table collapsed, errors + page count. `dev`: errors + ready line. |
-| **playwright** | `playwright` | ~99% | Failing test names + error messages; passing tests dropped. |
-| **prettier** | `prettier` | ~80% | `--check`: files needing formatting + count. `--write`: file count. |
-| **vite** | `vite` | ~65% | `build`: asset chunk table collapsed, module noise dropped. `dev`: HMR deduplication. |
-| **webpack** | `webpack`, `webpack-cli` | ~84% | Module resolution graph dropped; keeps assets, errors, warnings, and build result. |
-| **turbo** | `turbo`, `npx turbo` | ~81% | Inner task output stripped; keeps cache hit/miss per package + final summary. |
-| **stylelint** | `stylelint` | ~23% | Issues grouped by file, caps at 40 + `[+N more]`, summary count kept. |
-| **biome** | `biome`, `@biomejs/biome` | ~50% | Code context snippets (│/^^^) stripped; keeps file:line, rule name, and message. |
+| Handler | Keys | Key behavior |
+|---------|------|-------------|
+| **tsc** | `tsc` | Groups errors by file; deduplicates repeated TS codes; truncates verbose type messages. `Build OK` on clean. |
+| **vitest** | `vitest` | FAIL blocks + summary; drops `✓` lines. |
+| **jest** | `jest`, `bun`, `deno` | `●` failure blocks + summary; drops `PASS` lines. |
+| **nx** | `nx`, `npx nx` | `run-many`/`affected`: passing tasks collapsed to `[N tasks passed (N cached)]`; failing task output preserved verbatim. Injects `--output-style=stream`. |
+| **eslint** | `eslint` | Errors grouped by file, caps at 20 + `[+N more]`. |
+| **next** | `next` | `build`: route table collapsed, errors + page count. `dev`: errors + ready line. |
+| **playwright** | `playwright` | Failing test names + error messages; passing tests dropped. |
+| **prettier** | `prettier` | `--check`: files needing formatting + count. `--write`: file count. |
+| **vite** | `vite` | `build`: asset chunk table collapsed, module noise dropped. `dev`: HMR deduplication. |
+| **webpack** | `webpack`, `webpack-cli` | Module resolution graph dropped; keeps assets, errors, warnings, and build result. |
+| **turbo** | `turbo`, `npx turbo` | Inner task output stripped; keeps cache hit/miss per package + final summary. |
+| **stylelint** | `stylelint` | Issues grouped by file, caps at 40 + `[+N more]`, summary count kept. |
+| **biome** | `biome`, `@biomejs/biome` | Code context snippets (│/^^^) stripped; keeps file:line, rule name, and message. |
 
 **Python**
 
-| Handler | Keys | Savings | Key behavior |
-|---------|------|---------|-------------|
-| **pytest** | `pytest`, `py.test` | ~87% | FAILED node IDs + AssertionError + short summary. |
-| **uv** | `uv`, `uvx` | ~99% | `install`/`sync`/`add`: strips Downloading/Fetching/Preparing, Python version banner, venv creation, Resolved/Audited noise. Keeps errors, warnings, and final installed summary. |
-| **ruff** | `ruff` | ~79% | `check`: violations grouped by error code, first 3 shown + `[N more]`. `format`: summary line only. Clean run → `ruff: ok`. Injects `--output-format concise`. |
-| **mypy** | `mypy`, `mypy3` | ~47% | Errors grouped by file, capped at 10 per file with `[N more errors]`. Notes stripped. Daemon startup lines stripped. Clean run → `mypy: ok`. |
-| **pip** | `pip`, `pip3`, `poetry`, `pdm`, `conda` | ~80% | `install`: `[complete — N packages]` or already-satisfied short-circuit. |
-| **python** | `python`, `python3`, `python3.X` | ~60% | Traceback: keep block + final error. Long output: BERT. |
+| Handler | Keys | Key behavior |
+|---------|------|-------------|
+| **pytest** | `pytest`, `py.test` | FAILED node IDs + AssertionError + short summary. |
+| **uv** | `uv`, `uvx` | `install`/`sync`/`add`: strips Downloading/Fetching/Preparing noise. Keeps errors, warnings, and final installed summary. |
+| **ruff** | `ruff` | `check`: violations grouped by error code, first 3 shown + `[N more]`. `format`: summary line only. Clean run → `ruff: ok`. Injects `--output-format concise`. |
+| **mypy** | `mypy`, `mypy3` | Errors grouped by file, capped at 10 per file. Notes and daemon startup lines stripped. Clean run → `mypy: ok`. |
+| **pip** | `pip`, `pip3`, `poetry`, `pdm`, `conda` | `install`: `[complete — N packages]` or already-satisfied short-circuit. |
+| **python** | `python`, `python3`, `python3.X` | Traceback: keep block + final error. Long output: BERT. |
 
 **DevOps / Cloud**
 
-| Handler | Keys | Savings | Key behavior |
-|---------|------|---------|-------------|
-| **kubectl** | `kubectl`, `k`, `minikube`, `kind` | ~85% | `get`: smart column selection (NAME+STATUS+READY, drops AGE/RESTARTS). `logs`: BERT anomaly. `describe`: key sections. |
-| **gh** | `gh` | ~90% | `pr list`/`issue list`: compact tables. `pr view`: strips HTML noise. Passthrough for `--json`/`--jq`. |
-| **terraform** | `terraform`, `tofu` | ~88% | `plan`: `+`/`-`/`~` + summary. `validate`: short-circuits on success. |
-| **aws** | `aws`, `gcloud`, `az` | ~85% | Action-specific resource extraction (ec2, lambda, iam, s3api). JSON → schema fallback. |
-| **make** | `make`, `gmake`, `ninja` | ~75% | "Nothing to be done" short-circuit. Keeps errors + recipe failures. |
-| **go** | `go` | ~82% | `build`/`vet`: errors only. `test`: FAIL blocks + `[N tests passed]` summary. Drops `=== RUN`/`--- PASS`/`coverage:` lines. |
-| **golangci-lint** | `golangci-lint`, `golangci_lint` | ~88% | Diagnostics grouped by file; INFO/DEBUG runner noise dropped. |
-| **prisma** | `prisma` | ~85% | `generate`: client summary. `migrate`: migration names. `db push`: sync status. |
-| **mvn** | `mvn`, `mvnw`, `./mvnw` | ~80% | Drops `[INFO]` noise; keeps errors + reactor summary. |
-| **gradle** | `gradle`, `gradlew`, `./gradlew` | ~98% | UP-TO-DATE tasks collapsed to `[N tasks UP-TO-DATE]`. FAILED tasks, Kotlin errors, failure blocks kept. |
-| **helm** | `helm`, `helm3` | ~85% | `list`: compact table. `status`/`diff`/`template`: structured. |
+| Handler | Keys | Key behavior |
+|---------|------|-------------|
+| **kubectl** | `kubectl`, `k`, `minikube`, `kind` | `get`: smart column selection (NAME+STATUS+READY, drops AGE/RESTARTS). `logs`: BERT anomaly. `describe`: key sections. |
+| **gh** | `gh` | `pr list`/`issue list`: compact tables. `pr view`: strips HTML noise. Passthrough for `--json`/`--jq`. |
+| **terraform** | `terraform`, `tofu` | `plan`: `+`/`-`/`~` + summary. `validate`: short-circuits on success. |
+| **aws** | `aws`, `gcloud`, `az` | Action-specific resource extraction (ec2, lambda, iam, s3api). JSON → schema fallback. |
+| **make** | `make`, `gmake`, `ninja` | "Nothing to be done" short-circuit. Keeps errors + recipe failures. |
+| **go** | `go` | `build`/`vet`: errors only. `test`: FAIL blocks + `[N tests passed]` summary. Drops `=== RUN`/`--- PASS`/`coverage:` lines. |
+| **golangci-lint** | `golangci-lint`, `golangci_lint` | Diagnostics grouped by file; INFO/DEBUG runner noise dropped. |
+| **prisma** | `prisma` | `generate`: client summary. `migrate`: migration names. `db push`: sync status. |
+| **mvn** | `mvn`, `mvnw`, `./mvnw` | Drops `[INFO]` noise; keeps errors + reactor summary. |
+| **gradle** | `gradle`, `gradlew`, `./gradlew` | UP-TO-DATE tasks collapsed to `[N tasks UP-TO-DATE]`. FAILED tasks, Kotlin errors, failure blocks kept. |
+| **helm** | `helm`, `helm3` | `list`: compact table. `status`/`diff`/`template`: structured. |
 
 **System / Utility**
 
-| Handler | Keys | Savings | Key behavior |
-|---------|------|---------|-------------|
-| **cargo** | `cargo` | ~87% | `build`/`check`/`clippy`: JSON format, errors + warning count. `test`: failures + summary. Repeated Clippy rules grouped `[rule ×N]`. |
-| **git** | `git` | ~80% | `status`: Staged/Modified/Untracked counts. `log` injects `--oneline`, caps 20. `diff`: 2 context lines per side, 200-line total cap, per-file `[+N -M]` tally. Push/pull success short-circuits. |
-| **curl** | `curl` | ~96% | JSON → type schema. Non-JSON: cap 30 lines. |
-| **docker** | `docker`, `docker-compose` | ~85% | `logs`: ANSI strip + timestamp normalization before BERT. `ps`/`images`: compact table. |
-| **npm/yarn** | `npm`, `yarn` | ~85% | `install`: package count. Strips boilerplate (`> project@...`, `npm WARN`, spinners). |
-| **pnpm** | `pnpm`, `pnpx` | ~87% | `install`: summary; drops progress bars. `run`/`exec`: errors + tail. |
-| **clippy** | `clippy`, `cargo-clippy` | ~85% | Rustc-style diagnostics filtered; duplicate warnings collapsed. |
-| **journalctl** | `journalctl` | ~80% | Injects `--no-pager -n 200`. BERT anomaly scoring. |
-| **psql** | `psql`, `pgcli` | ~88% | Strips borders, pipe-separated columns, caps at 20 rows. |
-| **brew** | `brew` | ~75% | `install`/`update`: status lines + Caveats. |
-| **tree** | `tree` | ~70% | Injects `-I "node_modules\|.git\|target\|..."` unless user set `-I`. |
-| **diff** | `diff` | ~75% | `+`/`-`/`@@` + 2 context lines per hunk. Max 5 hunks + `[+N more hunks]`. |
-| **jq** | `jq` | ~80% | ≤20 lines pass through. Array: schema of first element + `[N items]`. |
-| **env** | `env`, `printenv` | ~65% | Categorized sections: [PATH]/[Language]/[Cloud]/[Tools]/[Other]. Long PATH values summarized as `[N entries — bin1, bin2, …]`. Sensitive values redacted. |
-| **ls** | `ls` | ~80% | Drops noise dirs (node_modules, .git, target, …). Top-3 extension summary. |
-| **cat** | `cat` | ~70% | ≤100 lines: pass through. 101–500: head/tail. >500: BERT. |
-| **grep / rg** | `grep`, `rg` | ~80% | Compact paths (>50 chars), per-file 25-match cap. |
-| **find** | `find` | ~78% | Strips common prefix, groups by directory, caps at 50. |
-| **json** | `json` | ~70% | Parses output as JSON, returns depth-limited type schema if smaller. |
-| **log** | `log` | ~75% | Timestamp/UUID/hex normalization, dedup `[×N]`, error/warning summary block. |
+| Handler | Keys | Key behavior |
+|---------|------|-------------|
+| **cargo** | `cargo` | `build`/`check`/`clippy`: JSON format, errors + warning count. `test`: failures + summary. Repeated Clippy rules grouped `[rule ×N]`. |
+| **git** | `git` | `status`: Staged/Modified/Untracked counts. `log` injects `--oneline`, caps 20. `diff`: 2 context lines per side, 200-line total cap, per-file `[+N -M]` tally. Push/pull success short-circuits. |
+| **curl** | `curl` | JSON → type schema. Non-JSON: cap 30 lines. |
+| **docker** | `docker`, `docker-compose` | `logs`: ANSI strip + timestamp normalization before BERT. `ps`/`images`: compact table. |
+| **npm/yarn** | `npm`, `yarn` | `install`: package count. Strips boilerplate (`> project@...`, `npm WARN`, spinners). |
+| **pnpm** | `pnpm`, `pnpx` | `install`: summary; drops progress bars. `run`/`exec`: errors + tail. |
+| **clippy** | `clippy`, `cargo-clippy` | Rustc-style diagnostics filtered; duplicate warnings collapsed. |
+| **journalctl** | `journalctl` | Injects `--no-pager -n 200`. BERT anomaly scoring. |
+| **psql** | `psql`, `pgcli` | Strips borders, pipe-separated columns, caps at 20 rows. |
+| **brew** | `brew` | `install`/`update`: status lines + Caveats. |
+| **tree** | `tree` | Injects `-I "node_modules\|.git\|target\|..."` unless user set `-I`. |
+| **diff** | `diff` | `+`/`-`/`@@` + 2 context lines per hunk. Max 5 hunks + `[+N more hunks]`. |
+| **jq** | `jq` | ≤20 lines pass through. Array: schema of first element + `[N items]`. |
+| **env** | `env`, `printenv` | Categorized sections: [PATH]/[Language]/[Cloud]/[Tools]/[Other]. Sensitive values redacted. |
+| **ls** | `ls` | Drops noise dirs (node_modules, .git, target, …). Top-3 extension summary. |
+| **cat** | `cat` | ≤100 lines: pass through. 101–500: head/tail. >500: BERT. |
+| **grep / rg** | `grep`, `rg` | Compact paths (>50 chars), per-file 25-match cap. |
+| **find** | `find` | Strips common prefix, groups by directory, caps at 50. |
+| **json** | `json` | Parses output as JSON, returns depth-limited type schema if smaller. |
+| **log** | `log` | Timestamp/UUID/hex normalization, dedup `[×N]`, error/warning summary block. |
 
 ---
 
@@ -354,21 +314,23 @@ ccr proxy git status  # run raw (no filtering), record analytics baseline
 Every output goes through these steps in order:
 
 ```
+0. Hard input ceiling (200k chars max — truncates before any stage runs)
 1. Strip ANSI codes
 2. Normalize whitespace (trailing spaces, blank-line collapse, consecutive-line dedup)
-2.5 ── Global regex pre-filter (NEW, zero BERT cost, always runs) ──────────────────
+2.5 Global regex pre-filter (zero BERT cost, always runs)
         • Strip progress bars: [=======>   ], [####  56%], bare ====== (8+ chars)
         • Strip download/transfer lines: "Downloading 45 MB", "Fetching index..."
         • Strip spinner lines: ⠙⠹⠸ / - \ |
         • Strip standalone percentage lines: "34%", "100% done"
         • Strip pure decorator lines ≥10 chars: ─────────, ═════════
 3. Command-specific pattern filter (regex rules from config/handlers)
-4. ── Only if over summarize_threshold_lines ─────────────────────────────────────
+4. Only if over summarize_threshold_lines:
    4a. BERT noise pre-filter (semantic: removes boilerplate via embedding distance)
    4b. Entropy-adaptive BERT summarization (7 passes, see below)
+5. Hard output cap (50k chars max — applied after all stages)
 ```
 
-**Minimum token gate (hook level):** Outputs under 15 tokens (`which`, `mkdir`, `wc`, `source`) skip the entire pipeline — no BERT, no analytics recording. This keeps efficiency metrics clean and avoids latency overhead on trivial outputs.
+**Minimum token gate (hook level):** Outputs under 15 tokens skip the entire pipeline — no BERT, no analytics recording.
 
 ### BERT Passes (step 4b)
 
@@ -406,8 +368,6 @@ Unknown commands (not in the exact/alias table) are matched to the nearest handl
 - `newtool install` → npm/pnpm/brew/pip boosted
 - `x lint` → eslint/golangci-lint/clippy boosted
 
-This makes BERT routing reliable for unknown wrappers that follow standard subcommand conventions.
-
 ---
 
 ## Configuration
@@ -422,6 +382,8 @@ tail_lines = 30
 strip_ansi = true
 normalize_whitespace = true
 deduplicate_lines = true
+input_char_ceiling = 200000      # truncate raw input before pipeline (0 = disabled)
+output_char_cap = 50000          # cap pipeline output (0 = disabled)
 # cost_per_million_tokens = 15.0  # override pricing in ccr gain
 
 [tee]
@@ -467,7 +429,7 @@ Fields:
 - **`keep_lines_matching`** — after stripping, keep only lines matching these (empty = keep all)
 - **`max_lines`** — hard cap on output line count
 - **`on_empty`** — output when all lines are filtered away
-- **`match_output`** — short-circuit: if `pattern` found and `unless_pattern` absent, return `message` immediately (no further filtering)
+- **`match_output`** — short-circuit: if `pattern` found and `unless_pattern` absent, return `message` immediately
 
 ---
 
@@ -482,6 +444,8 @@ CCR tracks state across turns within a session (identified by `CCR_SESSION_ID=$P
 **Elastic context** — As cumulative session tokens grow (25k → 80k), pipeline pressure scales 0 → 1, shrinking BERT budgets automatically. At >80% pressure: `[⚠ context near full — run ccr compress --scan-session --dry-run to estimate savings]`.
 
 **Pre-run cache** — git commands with identical HEAD+staged+unstaged state are served from cache (TTL 1h), skipping execution entirely.
+
+**Result cache** — post-pipeline output is frozen per input hash, returning byte-identical bytes on repeat calls. Prevents prompt cache busts in Anthropic's API.
 
 **Intent-aware query** — Reads Claude's last assistant message from the live session JSONL and uses it as the BERT query, biasing compression toward what Claude is currently working on.
 
@@ -502,7 +466,7 @@ CCR tracks state across turns within a session (identified by `CCR_SESSION_ID=$P
 
 Dispatches by `tool_name` — Bash, Read, Glob, or Grep:
 
-- **Bash** — min-token gate → noise pre-filter → global regex rules → EC pressure → IX intent query → BERT pipeline → ZI blocks → delta compression → sentence dedup → session cache → analytics
+- **Bash** — min-token gate → result cache → noise pre-filter → global regex rules → EC pressure → IX intent query → BERT pipeline → ZI blocks → delta compression → sentence dedup → session cache → analytics
 - **Read** — files < 50 lines pass through; larger files go through BERT pipeline with intent query; session dedup by file path
 - **Glob** — results ≤ 20 pass through; larger lists grouped by directory (max 60), session dedup by path-list hash
 - **Grep** — results ≤ 10 lines pass through; larger result sets routed through GrepHandler (compact paths, per-file 25-match cap)
@@ -520,6 +484,32 @@ ccr-sdk/        Conversation compression — tiered compressor, deduplicator, Ol
 ccr-eval/       Evaluation suite — Q&A + conversation fixtures against Claude API
 config/         Embedded default filter patterns (git, cargo, npm, docker)
 ```
+
+---
+
+## Claude Code Source Findings
+
+Claude Code's source was released on 2026-03-31. Reading it revealed three gaps in CCR that were silently costing tokens or causing stalls:
+
+### 1. Prompt Cache Stability (Result Cache)
+
+Claude Code maintains a running conversation history. Anthropic charges for the entire preceding conversation as input tokens on every **prompt cache miss**. A cache miss happens when the bytes sent to the API differ from the previous turn — even by a single character.
+
+**Finding:** CCR's BERT pipeline is non-deterministic across session turns (embeddings can shift slightly based on session state), so the same raw output could produce slightly different compressed bytes on a second call, busting the prompt cache.
+
+**Fix:** New post-pipeline result cache (`~/.local/share/ccr/result_cache/<session>.json`). After the first compression of a given raw input, the output bytes are frozen and returned identically on every subsequent call with the same input. Cache key is `hash(raw_text + "\0" + command_hint)` — deliberately excludes query and session state so the frozen bytes are stable regardless of context changes. TTL 1h, 200-entry cap per session.
+
+### 2. Input Ceiling
+
+**Finding:** Claude Code caps tool output at `DEFAULT_MAX_RESULT_SIZE_CHARS = 50_000` before sending it to the model. CCR processes output *before* Claude Code's own cap, so a `cat large.log` producing 10 MB of text fed every byte into CCR's BERT chunking loop — causing multi-second stalls, high memory use, and defeating the purpose of the cap.
+
+**Fix:** Stage 0 in the pipeline truncates raw input to 200k chars (≈50k tokens) before any stage runs. The head is preserved (keeps context from the top); a marker is appended: `[--- input truncated: kept Nk of Mk chars ---]`. Configurable via `input_char_ceiling` in `ccr.toml`; set to `0` to disable.
+
+### 3. Output Cap
+
+**Finding:** Structured data (JSON blobs, large code files) that doesn't compress well can survive the full BERT pipeline at 100k+ chars, negating CCR's savings. Claude Code's own `DEFAULT_MAX_RESULT_SIZE_CHARS = 50_000` provides the natural ceiling — CCR should match it.
+
+**Fix:** Final pipeline stage caps output at 50k chars before token counting. Appends `[--- output capped at Nk chars ---]`. Configurable via `output_char_cap` in `ccr.toml`; set to `0` to disable.
 
 ---
 

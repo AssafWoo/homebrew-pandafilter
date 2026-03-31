@@ -15,6 +15,9 @@ pub struct Analytics {
     /// Wall-clock time the underlying command took to execute, in milliseconds
     #[serde(default)]
     pub duration_ms: Option<u64>,
+    /// True when the result was served from the post-pipeline result cache.
+    #[serde(default)]
+    pub cache_hit: bool,
 }
 
 impl Analytics {
@@ -55,7 +58,19 @@ impl Analytics {
             timestamp_secs,
             subcommand,
             duration_ms,
+            cache_hit: false,
         }
+    }
+
+    pub fn new_cache_hit(
+        input_tokens: usize,
+        output_tokens: usize,
+        command: Option<String>,
+        subcommand: Option<String>,
+    ) -> Self {
+        let mut a = Self::new(input_tokens, output_tokens, command, subcommand, None);
+        a.cache_hit = true;
+        a
     }
 
     /// Tokens saved (absolute)
@@ -84,5 +99,12 @@ mod tests {
     fn full_savings() {
         let a = Analytics::compute(100, 0);
         assert!((a.savings_pct - 100.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn cache_hit_flag_set() {
+        let a = Analytics::new_cache_hit(100, 20, Some("cargo".to_string()), None);
+        assert!(a.cache_hit);
+        assert_eq!(a.input_tokens, 100);
     }
 }
