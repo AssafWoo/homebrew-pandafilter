@@ -13,7 +13,7 @@ mod util;
 mod zoom_store;
 
 #[derive(Parser)]
-#[command(name = "ccr", about = "Cool Cost Reduction — LLM token optimizer")]
+#[command(name = "ccr", about = "Cool Cost Reduction — LLM token optimizer", version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

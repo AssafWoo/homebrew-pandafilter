@@ -6,13 +6,13 @@ class Ccr < Formula
   # Prebuilt binaries — no Rust/LLVM build dependencies, installs in seconds.
   # Each tarball contains the ccr binary + libonnxruntime dylib bundled together.
   on_arm do
-    url "https://github.com/AssafWoo/homebrew-ccr/releases/download/v0.5.19/ccr-macos-arm64.tar.gz"
-    sha256 "cba64e62d3264d81e88efc6a22c90221f76fb7e1cf7d2f378a547a959d9eec5c"
+    url "https://github.com/AssafWoo/homebrew-ccr/releases/download/v0.5.20/ccr-macos-arm64.tar.gz"
+    sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   end
 
   on_intel do
-    url "https://github.com/AssafWoo/homebrew-ccr/releases/download/v0.5.19/ccr-macos-x86_64.tar.gz"
-    sha256 "a806283592a1bf7015ca28ffe45ef3619c2071aaa88c5767d02f790b1ed474fa"
+    url "https://github.com/AssafWoo/homebrew-ccr/releases/download/v0.5.20/ccr-macos-x86_64.tar.gz"
+    sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   end
 
   def install
