@@ -134,13 +134,37 @@ fn main() {
         Commands::Expand { id, list } => cmd::expand::run(id.as_deref().unwrap_or(""), list),
         Commands::Noise { reset } => cmd::noise::run(reset),
         Commands::Update => {
-            println!("ccr update is deprecated.");
-            println!();
-            println!("Update with Homebrew:");
-            println!("  brew update && brew upgrade assafwoo/ccr/ccr");
-            println!();
-            println!("Or reinstall:");
-            println!("  curl -fsSL https://github.com/AssafWoo/homebrew-ccr/raw/main/install.sh | bash");
+            // Detect the bad-keg migration case: older installs stored the keg
+            // as version "64" (inferred from "arm64" in the asset URL). brew upgrade
+            // then skips the update because it thinks 64 > 0.5.x.
+            let has_bad_keg = std::process::Command::new("brew")
+                .args(["--cellar", "assafwoo/ccr/ccr"])
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|cellar| {
+                    let path = cellar.trim().to_string();
+                    std::path::Path::new(&path).join("64").exists()
+                })
+                .unwrap_or(false);
+
+            if has_bad_keg {
+                println!("ccr update is deprecated — and your install has a known version mismatch.");
+                println!();
+                println!("Your brew keg is stored as version \"64\" (a one-time bug from an older");
+                println!("formula). brew upgrade won't fix it because 64 > 0.5.x.");
+                println!();
+                println!("Fix it with a one-time reinstall:");
+                println!("  brew reinstall assafwoo/ccr/ccr");
+                println!();
+                println!("After that, future updates work normally with:");
+                println!("  brew upgrade assafwoo/ccr/ccr");
+            } else {
+                println!("ccr update is deprecated.");
+                println!();
+                println!("Update with Homebrew:");
+                println!("  brew update && brew upgrade assafwoo/ccr/ccr");
+            }
             Ok(())
         }
         Commands::Compress { input, output, recent_turns, tier1_turns, ollama, ollama_model, max_tokens, dry_run, scan_session } =>
