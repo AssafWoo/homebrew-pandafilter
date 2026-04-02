@@ -206,7 +206,62 @@ for event in ['preToolUse', 'postToolUse']:
 \""
 
 # ─────────────────────────────────────────────────────────────────────────────
-hdr "5. ccr run — basic command compression"
+hdr "5. Agent installation — VS Code Copilot"
+# ─────────────────────────────────────────────────────────────────────────────
+
+run_check "ccr init --agent copilot exits 0" \
+  "ccr init --agent copilot"
+
+run_check "Copilot hook script created at ~/.vscode/extensions/.ccr-hook/ccr-rewrite.sh" \
+  "test -f $HOME/.vscode/extensions/.ccr-hook/ccr-rewrite.sh"
+
+run_check "Copilot hook script is executable" \
+  "test -x $HOME/.vscode/extensions/.ccr-hook/ccr-rewrite.sh"
+
+run_check "VS Code settings.json created" \
+  "test -f $HOME/.vscode/settings.json"
+
+run_check "VS Code settings.json is valid JSON" \
+  "python3 -m json.tool $HOME/.vscode/settings.json > /dev/null"
+
+run_check "VS Code settings.json contains ccr.preToolUseScript entry" \
+  "python3 -c \"
+import json
+with open('$HOME/.vscode/settings.json') as f:
+    d = json.load(f)
+adv = d.get('github.copilot.advanced', {})
+assert 'ccr.preToolUseScript' in adv, 'ccr.preToolUseScript missing from github.copilot.advanced'
+\""
+
+run_check "Copilot hook script reads tool_input.command from JSON" \
+  "grep -q 'tool_input.command' $HOME/.vscode/extensions/.ccr-hook/ccr-rewrite.sh"
+
+run_check "Copilot hook script exits 0 on empty/bad input" \
+  "echo '' | bash $HOME/.vscode/extensions/.ccr-hook/ccr-rewrite.sh; test \$? -eq 0"
+
+run_check "ccr init --agent copilot is idempotent (no duplicate keys)" \
+  "ccr init --agent copilot && python3 -c \"
+import json
+with open('$HOME/.vscode/settings.json') as f:
+    d = json.load(f)
+adv = d.get('github.copilot.advanced', {})
+assert list(adv.keys()).count('ccr.preToolUseScript') == 1, 'Duplicate ccr.preToolUseScript key'
+\""
+
+run_check "ccr init --uninstall --agent copilot removes hook script" \
+  "ccr init --uninstall --agent copilot && test ! -f $HOME/.vscode/extensions/.ccr-hook/ccr-rewrite.sh"
+
+run_check "ccr init --uninstall --agent copilot cleans settings.json" \
+  "python3 -c \"
+import json
+with open('$HOME/.vscode/settings.json') as f:
+    d = json.load(f)
+adv = d.get('github.copilot.advanced', {})
+assert 'ccr.preToolUseScript' not in adv, 'ccr.preToolUseScript still present after uninstall'
+\""
+
+# ─────────────────────────────────────────────────────────────────────────────
+hdr "6. ccr run — basic command compression"
 # ─────────────────────────────────────────────────────────────────────────────
 
 cd "$REPO"
@@ -238,7 +293,7 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-hdr "6. ccr filter — stdin pipeline"
+hdr "7. ccr filter — stdin pipeline"
 # ─────────────────────────────────────────────────────────────────────────────
 
 LONG_OUTPUT=$(python3 -c "
@@ -261,7 +316,7 @@ run_check "ccr filter with no command hint still works" \
   "echo 'hello world' | ccr filter"
 
 # ─────────────────────────────────────────────────────────────────────────────
-hdr "7. ccr hook — PostToolUse JSON simulation"
+hdr "8. ccr hook — PostToolUse JSON simulation"
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Simulate Claude Code calling ccr hook with a Bash tool response
@@ -323,7 +378,7 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-hdr "8. ccr rewrite — command rewriting"
+hdr "9. ccr rewrite — command rewriting"
 # ─────────────────────────────────────────────────────────────────────────────
 
 run_check "ccr rewrite 'git status' returns ccr-prefixed command" \
@@ -336,7 +391,7 @@ run_check "ccr rewrite 'echo hello' exits (no rewrite for unknown commands)" \
   "ccr rewrite 'echo hello' > /dev/null 2>&1 || true"
 
 # ─────────────────────────────────────────────────────────────────────────────
-hdr "9. ccr gain — analytics display"
+hdr "10. ccr gain — analytics display"
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Run a few more commands to ensure analytics exist

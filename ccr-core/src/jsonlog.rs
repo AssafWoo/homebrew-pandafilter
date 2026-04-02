@@ -1,17 +1,28 @@
-/// Returns true if >50% of non-empty lines are valid JSON objects.
+/// Returns true if >50% of non-empty lines are valid JSON objects AND at least one of those
+/// objects contains a recognised log-level key (level, severity, lvl, …).
+///
+/// The level-key guard prevents `go test -json`, `cargo --message-format json`, and similar
+/// structured-but-not-log JSON streams from being treated as structured logs and mangled before
+/// the NDJSON compaction stage can handle them.
 pub fn is_json_log(input: &str) -> bool {
     let lines: Vec<&str> = input.lines().filter(|l| !l.trim().is_empty()).collect();
     if lines.len() < 3 {
         return false;
     }
-    let json_count = lines
-        .iter()
-        .filter(|l| {
-            let t = l.trim();
-            t.starts_with('{') && serde_json::from_str::<serde_json::Value>(t).is_ok()
-        })
-        .count();
-    (json_count as f64 / lines.len() as f64) > 0.50
+    let mut json_count = 0usize;
+    let mut has_level_key = false;
+    for l in &lines {
+        let t = l.trim();
+        if t.starts_with('{') {
+            if let Ok(serde_json::Value::Object(obj)) = serde_json::from_str(t) {
+                json_count += 1;
+                if !has_level_key {
+                    has_level_key = LEVEL_KEYS.iter().any(|k| obj.contains_key(*k));
+                }
+            }
+        }
+    }
+    (json_count as f64 / lines.len() as f64) > 0.50 && has_level_key
 }
 
 const LEVEL_KEYS: &[&str] = &["level", "severity", "lvl", "log_level", "loglevel"];
@@ -251,6 +262,27 @@ mod tests {
     fn is_json_log_false_for_cargo_output() {
         let input = "   Compiling foo v0.1.0\nerror[E0308]: mismatched types\n  --> src/main.rs:5:10\n   |\n5  |     let x: i32 = \"hello\";\n   |                  ^^^^^^^";
         assert!(!is_json_log(input));
+    }
+
+    #[test]
+    fn is_json_log_false_for_go_test_json() {
+        // go test -json output has no level/severity key — must NOT be treated as structured log
+        let input = r#"{"Action":"run","Package":"github.com/foo/bar"}
+{"Action":"output","Package":"github.com/foo/bar","Test":"TestAdd","Output":"--- RUN   TestAdd\n"}
+{"Action":"pass","Package":"github.com/foo/bar","Test":"TestAdd","Elapsed":0.001}
+{"Action":"output","Package":"github.com/foo/bar","Test":"TestSub","Output":"--- RUN   TestSub\n"}
+{"Action":"pass","Package":"github.com/foo/bar","Test":"TestSub","Elapsed":0.001}
+{"Action":"pass","Package":"github.com/foo/bar","Elapsed":0.003}"#;
+        assert!(!is_json_log(input), "go test -json output should not be treated as structured log");
+    }
+
+    #[test]
+    fn is_json_log_true_for_structured_logs() {
+        // Real structured log output with level + msg keys — should fire
+        let input = r#"{"level":"info","msg":"server started","ts":1234567890}
+{"level":"info","msg":"request received","ts":1234567891}
+{"level":"error","msg":"db timeout","ts":1234567892,"error":"connection refused"}"#;
+        assert!(is_json_log(input), "structured logs with level key should be detected");
     }
 
     #[test]
