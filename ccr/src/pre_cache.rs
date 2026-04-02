@@ -150,9 +150,9 @@ fn kubectl_cache_key(args: &[String]) -> Option<PreCacheKey> {
         .or_else(|| extract_flag_value(args, "--namespace"))
         .unwrap_or_else(|| "default".to_string());
 
-    // Quick state probe: list all resource names in namespace
+    // Quick state probe — 3s timeout so an unreachable cluster never hangs the user
     let probe = std::process::Command::new("kubectl")
-        .args(["get", "all", "-n", &ns, "--no-headers", "-o", "name"])
+        .args(["get", "all", "-n", &ns, "--no-headers", "-o", "name", "--request-timeout=3s"])
         .output()
         .ok()?;
     if !probe.status.success() {

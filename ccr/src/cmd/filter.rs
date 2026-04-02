@@ -13,22 +13,9 @@ pub fn run(command_hint: Option<String>) -> Result<()> {
 
     io::stdout().write_all(result.output.as_bytes())?;
 
-    // Append analytics to ~/.local/share/ccr/analytics.jsonl
-    if let Some(data_dir) = dirs::data_local_dir() {
-        let ccr_dir = data_dir.join("ccr");
-        let _ = std::fs::create_dir_all(&ccr_dir);
-        let analytics_path = ccr_dir.join("analytics.jsonl");
-        if let Ok(json) = serde_json::to_string(&result.analytics) {
-            let _ = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&analytics_path)
-                .and_then(|mut f| {
-                    use std::io::Write;
-                    writeln!(f, "{}", json)
-                });
-        }
-    }
+    // Append analytics to SQLite (same path as ccr run / ccr hook)
+    let project_path = crate::analytics_db::current_project_path();
+    let _ = crate::analytics_db::append(&result.analytics, &project_path);
 
     Ok(())
 }

@@ -20,7 +20,7 @@ impl Handler for TscHandler {
     fn rewrite_args(&self, args: &[String]) -> Vec<String> {
         let mut out = args.to_vec();
         // Add --noEmit so TypeScript only type-checks without writing .js files
-        if !out.iter().any(|a| a == "--noEmit" || a == "--noEmit" || a == "--noemit") {
+        if !out.iter().any(|a| a == "--noEmit" || a == "--noemit") {
             out.push("--noEmit".to_string());
         }
         out
