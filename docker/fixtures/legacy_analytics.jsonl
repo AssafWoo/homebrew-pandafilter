@@ -1,0 +1,10 @@
+{"input_tokens":1200,"output_tokens":180,"savings_pct":85.0,"command":"git","timestamp_secs":1773696579,"subcommand":"status","duration_ms":120,"cache_hit":false,"agent":"claude"}
+{"input_tokens":4500,"output_tokens":900,"savings_pct":80.0,"command":"cargo","timestamp_secs":1773696600,"subcommand":"build","duration_ms":12000,"cache_hit":false,"agent":"claude"}
+{"input_tokens":800,"output_tokens":100,"savings_pct":87.5,"command":"git","timestamp_secs":1773700000,"subcommand":"diff","duration_ms":95,"cache_hit":false,"agent":"claude"}
+{"input_tokens":3200,"output_tokens":480,"savings_pct":85.0,"command":"cargo","timestamp_secs":1773750000,"subcommand":"test","duration_ms":8000,"cache_hit":false,"agent":"claude"}
+{"input_tokens":600,"output_tokens":60,"savings_pct":90.0,"command":"git","timestamp_secs":1773800000,"subcommand":"log","duration_ms":80,"cache_hit":true,"agent":"claude"}
+{"input_tokens":2100,"output_tokens":315,"savings_pct":85.0,"command":"npm","timestamp_secs":1773850000,"subcommand":"test","duration_ms":5000,"cache_hit":false,"agent":"claude"}
+{"input_tokens":950,"output_tokens":142,"savings_pct":85.0,"command":"kubectl","timestamp_secs":1773900000,"subcommand":"get","duration_ms":400,"cache_hit":false,"agent":"claude"}
+{"input_tokens":1800,"output_tokens":270,"savings_pct":85.0,"command":"terraform","timestamp_secs":1773950000,"subcommand":"plan","duration_ms":15000,"cache_hit":false,"agent":"claude"}
+{"input_tokens":700,"output_tokens":70,"savings_pct":90.0,"command":"git","timestamp_secs":1774000000,"subcommand":"status","duration_ms":88,"cache_hit":true,"agent":"claude"}
+{"input_tokens":5000,"output_tokens":750,"savings_pct":85.0,"command":"cargo","timestamp_secs":1774050000,"subcommand":"build","duration_ms":9500,"cache_hit":false,"agent":"claude"}

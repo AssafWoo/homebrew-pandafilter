@@ -1,0 +1,19 @@
+services:
+  ccr-test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: ccr-test:latest
+    container_name: ccr-test
+    environment:
+      # Simulate a real Claude Code user session
+      - HOME=/home/testuser
+      - TERM=xterm-256color
+      # Disable BERT to speed up tests (no GPU, no model download)
+      - CCR_NO_BERT=1
+    # Run as non-root (matches the Dockerfile USER directive)
+    user: testuser
+    # Each run gets a fresh container
+    rm: true
+    stdin_open: false
+    tty: false
