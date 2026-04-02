@@ -12,8 +12,21 @@ permissions:
   contents: write
 
 jobs:
+  integration-test:
+    name: Integration tests (Docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build test image
+        run: docker build -f docker/Dockerfile -t ccr-test:latest .
+
+      - name: Run integration tests
+        run: docker run --rm -e CCR_NO_BERT=1 ccr-test:latest
+
   build:
     name: Build ${{ matrix.target }}
+    needs: integration-test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
