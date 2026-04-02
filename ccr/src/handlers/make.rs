@@ -38,6 +38,15 @@ fn re_path_error() -> &'static regex::Regex {
 }
 
 impl Handler for MakeHandler {
+    fn rewrite_args(&self, args: &[String]) -> Vec<String> {
+        let mut out = args.to_vec();
+        // Suppress "make[N]: Entering/Leaving directory" noise
+        if !out.iter().any(|a| a == "--no-print-directory" || a == "--print-directory") {
+            out.push("--no-print-directory".to_string());
+        }
+        out
+    }
+
     fn filter(&self, output: &str, _args: &[String]) -> String {
         const MAKE_RULES: &[util::MatchOutputRule] = &[util::MatchOutputRule {
             success_pattern: r"(?i)nothing to be done|build ok|all targets up to date",

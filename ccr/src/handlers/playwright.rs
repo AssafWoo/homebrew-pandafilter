@@ -5,6 +5,15 @@ use super::Handler;
 pub struct PlaywrightHandler;
 
 impl Handler for PlaywrightHandler {
+    fn rewrite_args(&self, args: &[String]) -> Vec<String> {
+        let mut out = args.to_vec();
+        // Default to list reporter (compact one-line-per-test format)
+        if !out.iter().any(|a| a.starts_with("--reporter")) {
+            out.push("--reporter=list".to_string());
+        }
+        out
+    }
+
     fn filter(&self, output: &str, args: &[String]) -> String {
         let subcmd = args.get(1).map(|s| s.as_str()).unwrap_or("");
         match subcmd {

@@ -15,7 +15,9 @@ fn make_collapse_filter() -> PatternFilter {
         patterns: vec![FilterPattern {
             regex: r"^\s*Compiling \S+".to_string(),
             action: FilterAction::Simple(SimpleAction::Collapse),
+            strip_ansi: false,
         }],
+        on_empty: None,
     })
     .unwrap()
 }
@@ -25,7 +27,9 @@ fn make_remove_filter() -> PatternFilter {
         patterns: vec![FilterPattern {
             regex: r"^noise:".to_string(),
             action: FilterAction::Simple(SimpleAction::Remove),
+            strip_ansi: false,
         }],
+        on_empty: None,
     })
     .unwrap()
 }
@@ -139,7 +143,9 @@ fn pipeline_result_carries_zoom_blocks_when_enabled() {
             patterns: vec![FilterPattern {
                 regex: r"^VERBOSE: loading ".to_string(),
                 action: FilterAction::Simple(SimpleAction::Collapse),
+                strip_ansi: false,
             }],
+            on_empty: None,
         },
     );
     let config = CcrConfig { commands, ..CcrConfig::default() };

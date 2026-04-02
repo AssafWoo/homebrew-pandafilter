@@ -56,22 +56,8 @@ pub fn run(history: bool, days: u32, breakdown: bool) -> Result<()> {
 // ─── Data loading ──────────────────────────────────────────────────────────────
 
 fn load_records() -> Result<Vec<Analytics>> {
-    let path = dirs::data_local_dir()
-        .map(|d| d.join("ccr").join("analytics.jsonl"))
-        .filter(|p| p.exists());
-
-    let records = match path {
-        None => vec![],
-        Some(p) => {
-            let content = std::fs::read_to_string(&p)?;
-            content
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .filter_map(|l| serde_json::from_str(l).ok())
-                .collect()
-        }
-    };
-    Ok(records)
+    // Load from SQLite (migrates from JSONL automatically on first call)
+    crate::analytics_db::load_all(None)
 }
 
 // ─── Summary view (default) ────────────────────────────────────────────────────

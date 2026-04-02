@@ -4,6 +4,18 @@ use std::collections::BTreeMap;
 pub struct GrepHandler;
 
 impl Handler for GrepHandler {
+    fn rewrite_args(&self, args: &[String]) -> Vec<String> {
+        let mut out = args.to_vec();
+        // Ensure consistent "filename:lineno:match" format for the filter's parser
+        if !out.iter().any(|a| a == "--no-heading" || a == "--heading") {
+            out.push("--no-heading".to_string());
+        }
+        if !out.iter().any(|a| a == "--with-filename" || a == "-H" || a == "--no-filename" || a == "-h") {
+            out.push("--with-filename".to_string());
+        }
+        out
+    }
+
     fn filter(&self, output: &str, _args: &[String]) -> String {
         // Detect if output uses "filename:lineno:match" format (grep -n or rg default)
         let lines: Vec<&str> = output.lines().filter(|l| !l.trim().is_empty()).collect();

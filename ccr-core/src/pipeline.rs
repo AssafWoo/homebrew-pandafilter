@@ -125,6 +125,12 @@ impl Pipeline {
         // reformat to readable [LEVEL] message lines before regex passes.
         text = crate::jsonlog::compact(&text);
 
+        // 2.4. NDJSON streaming compaction (go test -json, jest JSON reporter, cargo --message-format json).
+        // Only fires when detect() identifies ≥3 JSON-object lines in the first 10 non-empty lines.
+        if crate::ndjson::detect(&text) {
+            text = crate::ndjson::compact(&text, command_hint.unwrap_or(""));
+        }
+
         // 2.5. Apply global pre-filter rules (pure regex, zero BERT cost, always runs)
         text = global_rules::apply(&text);
 
@@ -336,7 +342,9 @@ mod tests {
                 patterns: vec![FilterPattern {
                     regex: "^VERBOSE: ".to_string(),
                     action: FilterAction::Simple(SimpleAction::Collapse),
+                    strip_ansi: false,
                 }],
+                on_empty: None,
             },
         );
         let config = CcrConfig { commands, ..CcrConfig::default() };
@@ -356,7 +364,9 @@ mod tests {
                 patterns: vec![FilterPattern {
                     regex: "^VERBOSE: ".to_string(),
                     action: FilterAction::Simple(SimpleAction::Remove),
+                    strip_ansi: false,
                 }],
+                on_empty: None,
             },
         );
         let config = CcrConfig { commands, ..CcrConfig::default() };

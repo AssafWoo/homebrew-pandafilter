@@ -4,6 +4,23 @@ use std::collections::BTreeMap;
 pub struct FindHandler;
 
 impl Handler for FindHandler {
+    fn rewrite_args(&self, args: &[String]) -> Vec<String> {
+        let mut out = args.to_vec();
+        // Inject -maxdepth 8 if no depth limit is already set
+        // Prevents runaway traversal into deeply nested node_modules / .git trees
+        if !out.iter().any(|a| a == "-maxdepth" || a == "-mindepth") {
+            // Insert after the path argument (index 1) if present, else append
+            if out.len() >= 2 {
+                out.insert(2, "8".to_string());
+                out.insert(2, "-maxdepth".to_string());
+            } else {
+                out.push("-maxdepth".to_string());
+                out.push("8".to_string());
+            }
+        }
+        out
+    }
+
     fn filter(&self, output: &str, _args: &[String]) -> String {
         let lines: Vec<&str> = output
             .lines()

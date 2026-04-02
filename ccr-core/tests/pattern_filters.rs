@@ -13,13 +13,14 @@ use ccr_core::patterns::PatternFilter;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn make_filter(patterns: Vec<FilterPattern>) -> PatternFilter {
-    PatternFilter::new(&CommandConfig { patterns }).expect("valid patterns")
+    PatternFilter::new(&CommandConfig { patterns, on_empty: None }).expect("valid patterns")
 }
 
 fn rp(regex: &str) -> FilterPattern {
     FilterPattern {
         regex: regex.to_string(),
         action: FilterAction::Simple(SimpleAction::Remove),
+        strip_ansi: false,
     }
 }
 
@@ -27,6 +28,7 @@ fn cp(regex: &str) -> FilterPattern {
     FilterPattern {
         regex: regex.to_string(),
         action: FilterAction::Simple(SimpleAction::Collapse),
+        strip_ansi: false,
     }
 }
 

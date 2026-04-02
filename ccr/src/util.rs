@@ -43,23 +43,11 @@ pub fn project_key() -> Option<String> {
         .map(|p| hash_str(&p.to_string_lossy()))
 }
 
-/// Append an analytics record to `~/.local/share/ccr/analytics.jsonl`.
+/// Append an analytics record to the SQLite analytics database.
+/// Falls back silently on any error (analytics must never break core functionality).
 pub fn append_analytics(analytics: &ccr_core::analytics::Analytics) {
-    if let Some(data_dir) = dirs::data_local_dir() {
-        let ccr_dir = data_dir.join("ccr");
-        let _ = std::fs::create_dir_all(&ccr_dir);
-        let path = ccr_dir.join("analytics.jsonl");
-        if let Ok(json) = serde_json::to_string(analytics) {
-            let _ = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)
-                .and_then(|mut f| {
-                    use std::io::Write;
-                    writeln!(f, "{}", json)
-                });
-        }
-    }
+    let project_path = crate::analytics_db::current_project_path();
+    let _ = crate::analytics_db::append(analytics, &project_path);
 }
 
 #[cfg(test)]

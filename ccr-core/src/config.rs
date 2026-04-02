@@ -161,20 +161,72 @@ impl CcrConfig {
 pub struct CommandConfig {
     #[serde(default)]
     pub patterns: Vec<FilterPattern>,
+    /// Substitution returned when the entire output is blank after all filters.
+    /// TOML: `on_empty = "(nothing to do)"`
+    #[serde(default)]
+    pub on_empty: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FilterPattern {
     pub regex: String,
     pub action: FilterAction,
+    /// Strip ANSI escape codes from the line before applying this pattern's regex.
+    /// The original (ANSI-carrying) line is preserved in the output unless removed.
+    #[serde(default)]
+    pub strip_ansi: bool,
 }
 
+/// 8-stage filter DSL — all variants are backward-compatible via `#[serde(untagged)]`.
+///
+/// TOML examples:
+/// ```toml
+/// action = "Remove"
+/// action = "Collapse"
+/// action = { ReplaceWith = "[npm install complete]" }
+/// action = { TruncateLinesAt = 120 }
+/// action = { HeadLines = 30 }
+/// action = { TailLines = 30 }
+/// action = { OnEmpty = "(nothing to do)" }
+/// action = { MatchOutput = { message = "Build succeeded", unless = "error" } }
+/// ```
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(untagged)]
 pub enum FilterAction {
+    // ── Existing (backward-compatible) ───────────────────────────────────────
     Simple(SimpleAction),
     #[allow(non_snake_case)]
     ReplaceWith { ReplaceWith: String },
+
+    // ── New DSL stages ────────────────────────────────────────────────────────
+    /// Short-circuit: if ANY line matches this pattern's regex, immediately
+    /// return `message` instead of continuing through the filter chain.
+    /// If `unless` is set and also matches any line, the short-circuit is suppressed.
+    #[allow(non_snake_case)]
+    MatchOutput { MatchOutput: MatchOutputConfig },
+
+    /// Truncate each matching line to at most N characters (adds `…` suffix).
+    #[allow(non_snake_case)]
+    TruncateLinesAt { TruncateLinesAt: usize },
+
+    /// After all line-level passes, keep only the first N lines.
+    #[allow(non_snake_case)]
+    HeadLines { HeadLines: usize },
+
+    /// After all line-level passes, keep only the last N lines.
+    #[allow(non_snake_case)]
+    TailLines { TailLines: usize },
+
+    /// If the output is blank after all processing, substitute this message.
+    #[allow(non_snake_case)]
+    OnEmpty { OnEmpty: String },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct MatchOutputConfig {
+    pub message: String,
+    #[serde(default)]
+    pub unless: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]

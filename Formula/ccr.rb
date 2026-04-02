@@ -2,7 +2,7 @@ class Ccr < Formula
   desc "LLM token optimizer for Claude Code — 60-90% token savings on dev operations"
   homepage "https://github.com/AssafWoo/homebrew-ccr"
   license "MIT"
-  version "0.5.29"
+  version "0.6.0"
 
   depends_on "jq"
 

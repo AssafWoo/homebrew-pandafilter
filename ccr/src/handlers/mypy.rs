@@ -28,6 +28,15 @@ const MAX_ERRORS_PER_FILE: usize = 10;
 pub struct MypyHandler;
 
 impl Handler for MypyHandler {
+    fn rewrite_args(&self, args: &[String]) -> Vec<String> {
+        let mut out = args.to_vec();
+        // Inject --no-color so regex patterns don't need to handle ANSI escapes
+        if !out.iter().any(|a| a == "--no-color" || a == "--no-colour") {
+            out.push("--no-color".to_string());
+        }
+        out
+    }
+
     fn filter(&self, output: &str, _args: &[String]) -> String {
         filter_mypy(output)
     }

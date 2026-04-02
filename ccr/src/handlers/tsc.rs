@@ -17,6 +17,15 @@ fn re_ts_error() -> &'static regex::Regex {
 const MAX_MSG_LEN: usize = 80;
 
 impl Handler for TscHandler {
+    fn rewrite_args(&self, args: &[String]) -> Vec<String> {
+        let mut out = args.to_vec();
+        // Add --noEmit so TypeScript only type-checks without writing .js files
+        if !out.iter().any(|a| a == "--noEmit" || a == "--noEmit" || a == "--noemit") {
+            out.push("--noEmit".to_string());
+        }
+        out
+    }
+
     fn filter(&self, output: &str, _args: &[String]) -> String {
         // Clean build
         if output.contains("Found 0 errors") {

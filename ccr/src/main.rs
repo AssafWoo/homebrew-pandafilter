@@ -5,8 +5,18 @@ enum AgentTarget {
     #[default]
     Claude,
     Cursor,
+    /// VS Code GitHub Copilot
+    Copilot,
+    /// Gemini CLI
+    Gemini,
+    /// Cline (.clinerules integration)
+    Cline,
+    /// Install for all detected agents
+    All,
 }
 
+mod agents;
+mod analytics_db;
 mod cmd;
 mod config_loader;
 mod handlers;
@@ -152,10 +162,18 @@ fn main() {
         Commands::Gain { history, days, breakdown } => cmd::gain::run(history, days, breakdown),
         Commands::Hook => hook::run(),
         Commands::Init { uninstall, agent } => match (uninstall, agent) {
-            (true,  AgentTarget::Claude) => uninstall_ccr(),
-            (true,  AgentTarget::Cursor) => uninstall_cursor(),
-            (false, AgentTarget::Claude) => init(),
-            (false, AgentTarget::Cursor) => init_cursor(),
+            (true,  AgentTarget::Claude)  => uninstall_ccr(),
+            (true,  AgentTarget::Cursor)  => uninstall_cursor(),
+            (false, AgentTarget::Claude)  => init(),
+            (false, AgentTarget::Cursor)  => init_cursor(),
+            (false, AgentTarget::Copilot) => init_agent("copilot"),
+            (false, AgentTarget::Gemini)  => init_agent("gemini"),
+            (false, AgentTarget::Cline)   => init_agent("cline"),
+            (false, AgentTarget::All)     => init_all_agents(),
+            (true,  AgentTarget::Copilot) => uninstall_agent("copilot"),
+            (true,  AgentTarget::Gemini)  => uninstall_agent("gemini"),
+            (true,  AgentTarget::Cline)   => uninstall_agent("cline"),
+            (true,  AgentTarget::All)     => uninstall_all_agents(),
         },
         Commands::Run { args } => cmd::run::run(args),
         Commands::Rewrite { command } => cmd::rewrite::run(command),
@@ -588,6 +606,55 @@ fn cursor_insert_hook_entry(
         false
     }
 }
+
+// ── New agent helpers ─────────────────────────────────────────────────────────
+
+fn init_agent(agent: &str) -> anyhow::Result<()> {
+    let ccr_bin = std::env::current_exe()
+        .ok()
+        .unwrap_or_else(|| std::path::PathBuf::from("ccr"));
+    let ccr_bin_str = ccr_bin.to_string_lossy().to_string();
+    match crate::agents::get_installer(agent) {
+        Some(installer) => installer.install(&ccr_bin_str),
+        None => {
+            anyhow::bail!("Unknown agent '{}'. Valid agents: copilot, gemini, cline", agent)
+        }
+    }
+}
+
+fn uninstall_agent(agent: &str) -> anyhow::Result<()> {
+    match crate::agents::get_installer(agent) {
+        Some(installer) => installer.uninstall(),
+        None => {
+            anyhow::bail!("Unknown agent '{}'. Valid agents: copilot, gemini, cline", agent)
+        }
+    }
+}
+
+fn init_all_agents() -> anyhow::Result<()> {
+    // Always install the Claude (default) agent first
+    init()?;
+    // Then attempt each new agent, printing warnings on failure
+    for agent in &["copilot", "gemini", "cline"] {
+        if let Err(e) = init_agent(agent) {
+            eprintln!("warning: could not install {} agent: {}", agent, e);
+        }
+    }
+    Ok(())
+}
+
+fn uninstall_all_agents() -> anyhow::Result<()> {
+    let _ = uninstall_ccr();
+    let _ = uninstall_cursor();
+    for agent in &["copilot", "gemini", "cline"] {
+        if let Err(e) = uninstall_agent(agent) {
+            eprintln!("warning: could not uninstall {} agent: {}", agent, e);
+        }
+    }
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// Add a hook command to an existing hook-event array without removing other entries.
 /// If an entry for `matcher` already contains `command`, it is not duplicated.

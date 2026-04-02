@@ -1,6 +1,6 @@
 [package]
 name = "ccr"
-version = "0.5.29"
+version = "0.6.0"
 edition = "2021"
 
 [[bin]]
@@ -27,6 +27,7 @@ owo-colors.workspace = true
 atty = "0.2"
 sha2.workspace = true
 hex.workspace  = true
+rusqlite.workspace = true
 
 [dev-dependencies]
 assert_cmd = "2"

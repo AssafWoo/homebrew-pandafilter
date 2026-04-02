@@ -3,6 +3,7 @@ pub mod ansi;
 pub mod global_rules;
 pub mod config;
 pub mod jsonlog;
+pub mod ndjson;
 pub mod patterns;
 pub mod pipeline;
 pub mod sentence;

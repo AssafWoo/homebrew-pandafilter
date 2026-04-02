@@ -16,6 +16,7 @@ patterns = [
 patterns = [
   { regex = "^\\s+Compiling \\S+ v[\\d.]+", action = "Collapse" },
   { regex = "^\\s+Downloaded \\S+ v[\\d.]+", action = "Remove" },
+  { regex = "^error\\[E\\d+\\]", action = { TruncateLinesAt = 200 } },
 ]
 
 [commands.npm]
@@ -78,6 +79,7 @@ patterns = [
   { regex = "^make\\[\\d+\\]: Leaving directory", action = "Remove" },
   { regex = "^make\\[\\d+\\]: Nothing to be done", action = "Remove" },
 ]
+on_empty = "(make: nothing to be done)"
 
 [commands.tsc]
 patterns = [

@@ -3,6 +3,15 @@ use super::Handler;
 pub struct WgetHandler;
 
 impl Handler for WgetHandler {
+    fn rewrite_args(&self, args: &[String]) -> Vec<String> {
+        let mut out = args.to_vec();
+        // Add --quiet (suppresses progress/spinner) unless verbose mode is explicitly set
+        if !out.iter().any(|a| a == "--quiet" || a == "-q" || a == "--verbose" || a == "-v" || a == "--debug") {
+            out.push("--quiet".to_string());
+        }
+        out
+    }
+
     fn filter(&self, output: &str, _args: &[String]) -> String {
         let important: Vec<&str> = output
             .lines()
