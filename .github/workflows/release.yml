@@ -176,6 +176,9 @@ jobs:
     name: Update Homebrew formula
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -222,14 +225,24 @@ jobs:
           echo "--- Formula after update ---"
           head -18 Formula/ccr.rb
 
-      - name: Commit and push formula
+      - name: Commit and push formula via PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/ccr.rb
           git diff --cached --quiet && echo "No formula changes" && exit 0
-          git commit -m "chore: update formula for ${GITHUB_REF_NAME}"
-          # Pull any commits that landed since checkout (e.g. another push to main)
-          # before pushing to avoid rejection.
-          git pull --rebase origin main
-          git push origin HEAD:main
+          TAG="${GITHUB_REF_NAME}"
+          BRANCH="bot/formula-${TAG}"
+          git checkout -b "$BRANCH"
+          git commit -m "chore: update formula for ${TAG}"
+          git push origin "$BRANCH"
+          # Enable auto-merge on the repo so the PR can merge once checks pass
+          gh api repos/AssafWoo/homebrew-ccr --method PATCH -f allow_auto_merge=true --silent || true
+          PR_URL=$(gh pr create \
+            --title "chore: update formula for ${TAG}" \
+            --body "Automated formula update: download URLs and SHA-256 checksums for ${TAG}." \
+            --base main \
+            --head "$BRANCH")
+          gh pr merge "$PR_URL" --squash --auto --delete-branch
