@@ -4,15 +4,15 @@
 # then runs this image. Total Docker build time: ~10 seconds.
 FROM ubuntu:24.04
 
-ARG CCR_BINARY=target/x86_64-unknown-linux-gnu/release/ccr
+ARG PANDA_BINARY=target/x86_64-unknown-linux-gnu/release/panda
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git jq sqlite3 python3 make bash ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Inject the pre-built binary
-COPY ${CCR_BINARY} /usr/local/bin/ccr
-RUN chmod +x /usr/local/bin/ccr
+COPY ${PANDA_BINARY} /usr/local/bin/panda
+RUN chmod +x /usr/local/bin/panda
 
 # Test scripts and fixtures
 COPY docker/test.sh /src/docker/test.sh

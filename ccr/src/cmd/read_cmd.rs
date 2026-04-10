@@ -1,6 +1,6 @@
 use anyhow::Result;
 use crate::handlers::{Handler, read::ReadHandlerLevel};
-use ccr_core::config::ReadMode;
+use panda_core::config::ReadMode;
 
 pub fn run(file: &str, level: &str) -> Result<()> {
     let content = if file == "-" {
@@ -28,15 +28,15 @@ pub fn run(file: &str, level: &str) -> Result<()> {
     };
     let filtered = handler.filter(&content, &args);
 
-    let in_tok  = ccr_core::tokens::count_tokens(&content);
-    let out_tok = ccr_core::tokens::count_tokens(&filtered);
+    let in_tok  = panda_core::tokens::count_tokens(&content);
+    let out_tok = panda_core::tokens::count_tokens(&filtered);
     let saved   = in_tok.saturating_sub(out_tok);
     let pct     = if in_tok > 0 { saved * 100 / in_tok } else { 0 };
 
     print!("{}", filtered);
 
     eprintln!(
-        "[ccr read-file] level={} in={} out={} saved={}%",
+        "[panda read-file] level={} in={} out={} saved={}%",
         level, in_tok, out_tok, pct
     );
     Ok(())

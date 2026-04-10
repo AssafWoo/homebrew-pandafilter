@@ -1,5 +1,5 @@
 //! SQLite-backed analytics store.
-//! Replaces the JSONL file at `~/.local/share/ccr/analytics.jsonl`.
+//! Replaces the JSONL file at `~/.local/share/panda/analytics.jsonl`.
 //!
 //! On first open, if `analytics.jsonl` exists and the DB is empty, all JSONL
 //! records are migrated automatically (the source is renamed to `.jsonl.bak`).
@@ -8,17 +8,17 @@ use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 
-use ccr_core::analytics::Analytics;
+use panda_core::analytics::Analytics;
 
 // ── Paths ──────────────────────────────────────────────────────────────────────
 
 /// Returns the path to the SQLite database file.
 pub fn db_path() -> Option<PathBuf> {
-    Some(dirs::data_local_dir()?.join("ccr").join("analytics.db"))
+    Some(dirs::data_local_dir()?.join("panda").join("analytics.db"))
 }
 
 fn jsonl_path() -> Option<PathBuf> {
-    Some(dirs::data_local_dir()?.join("ccr").join("analytics.jsonl"))
+    Some(dirs::data_local_dir()?.join("panda").join("analytics.jsonl"))
 }
 
 // ── Open / schema ─────────────────────────────────────────────────────────────

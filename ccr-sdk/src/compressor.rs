@@ -1,5 +1,5 @@
-use ccr_core::summarizer::{semantic_similarity, summarize_assistant_message, summarize_message};
-use ccr_core::tokens::count_tokens;
+use panda_core::summarizer::{semantic_similarity, summarize_assistant_message, summarize_message};
+use panda_core::tokens::count_tokens;
 
 use crate::message::Message;
 use crate::ollama::OllamaConfig;

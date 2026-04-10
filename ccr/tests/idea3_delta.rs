@@ -22,9 +22,9 @@
 ///       ) -> Option<DeltaResult>
 ///   }
 ///
-/// Run with: cargo test -p ccr --test idea3_delta
-use ccr::session::SessionState;
-use ccr_core::summarizer::embed_batch;
+/// Run with: cargo test -p panda --test idea3_delta
+use panda::session::SessionState;
+use panda_core::summarizer::embed_batch;
 
 // ── helper ────────────────────────────────────────────────────────────────────
 
@@ -39,7 +39,7 @@ fn embed_text(text: &str) -> Vec<f32> {
 fn make_session_with_prior(cmd: &str, prior_output: &str) -> SessionState {
     let mut session = SessionState::default();
     let emb = embed_text(prior_output);
-    let tokens = ccr_core::tokens::count_tokens(prior_output);
+    let tokens = panda_core::tokens::count_tokens(prior_output);
     session.record(cmd, emb, tokens, prior_output, false, None);
     session
 }

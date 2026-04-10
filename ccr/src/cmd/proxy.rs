@@ -1,11 +1,11 @@
 use anyhow::Result;
-use ccr_core::tokens;
+use panda_core::tokens;
 use std::process::Command;
 
 /// Execute a command raw (no filtering), record analytics, write tee.
 pub fn run(args: Vec<String>) -> Result<()> {
     if args.is_empty() {
-        anyhow::bail!("ccr proxy: no command specified");
+        anyhow::bail!("panda proxy: no command specified");
     }
 
     let cmd_name = args[0].clone();
@@ -32,7 +32,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
 
     // Record analytics with savings = 0 (no filtering applied)
     let token_count = tokens::count_tokens(&combined);
-    let analytics = ccr_core::analytics::Analytics::compute_with_command(
+    let analytics = panda_core::analytics::Analytics::compute_with_command(
         token_count,
         token_count,
         Some(cmd_name),
@@ -48,7 +48,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
 }
 
 fn write_tee(cmd: &str, content: &str) {
-    let Some(tee_dir) = dirs::data_local_dir().map(|d| d.join("ccr").join("tee")) else {
+    let Some(tee_dir) = dirs::data_local_dir().map(|d| d.join("panda").join("tee")) else {
         return;
     };
     let _ = std::fs::create_dir_all(&tee_dir);
@@ -67,11 +67,11 @@ fn write_tee(cmd: &str, content: &str) {
     let _ = std::fs::write(&path, content);
 }
 
-fn append_analytics(analytics: &ccr_core::analytics::Analytics) {
+fn append_analytics(analytics: &panda_core::analytics::Analytics) {
     if let Some(data_dir) = dirs::data_local_dir() {
-        let ccr_dir = data_dir.join("ccr");
-        let _ = std::fs::create_dir_all(&ccr_dir);
-        let path = ccr_dir.join("analytics.jsonl");
+        let panda_dir = data_dir.join("panda");
+        let _ = std::fs::create_dir_all(&panda_dir);
+        let path = panda_dir.join("analytics.jsonl");
         if let Ok(json) = serde_json::to_string(analytics) {
             let _ = std::fs::OpenOptions::new()
                 .create(true)

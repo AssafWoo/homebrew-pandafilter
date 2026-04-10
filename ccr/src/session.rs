@@ -1,8 +1,8 @@
 //! Per-session state: cross-turn output cache and compression tracking.
 //!
 //! Session identity uses the parent PID of the Claude Code process, injected
-//! by the hook script as `CCR_SESSION_ID=$PPID`. Falls back to an hourly
-//! timestamp window for `ccr run` invocations from a terminal.
+//! by the hook script as `PANDA_SESSION_ID=$PPID`. Falls back to an hourly
+//! timestamp window for `panda run` invocations from a terminal.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -58,10 +58,10 @@ pub struct SessionHit {
 
 /// Returns the stable session identifier for this Claude Code session.
 ///
-/// The hook script injects `CCR_SESSION_ID=$PPID` so that all hook invocations
+/// The hook script injects `PANDA_SESSION_ID=$PPID` so that all hook invocations
 /// within one Claude Code process share the same session file.
 pub fn session_id() -> String {
-    std::env::var("CCR_SESSION_ID").unwrap_or_else(|_| {
+    std::env::var("PANDA_SESSION_ID").unwrap_or_else(|_| {
         // Fallback: group by calendar day (UTC) so a long session spanning an
         // hour boundary doesn't get split into two separate state files.
         let secs = now_secs();
@@ -74,7 +74,7 @@ pub fn session_id() -> String {
 fn session_path(id: &str) -> Option<PathBuf> {
     Some(
         dirs::data_local_dir()?
-            .join("ccr")
+            .join("panda")
             .join("sessions")
             .join(format!("{}.json", id)),
     )
@@ -340,7 +340,7 @@ impl SessionState {
         // Re-embed each new line and compare against the prior content.
         // Use state_content for full comparison when available (state commands),
         // otherwise fall back to content_preview.
-        let model = ccr_core::summarizer::embed_batch(new_lines).ok()?;
+        let model = panda_core::summarizer::embed_batch(new_lines).ok()?;
 
         let prior_text = prior
             .state_content
@@ -351,7 +351,7 @@ impl SessionState {
         if prior_lines.is_empty() {
             return None;
         }
-        let prior_embs = ccr_core::summarizer::embed_batch(&prior_lines).ok()?;
+        let prior_embs = panda_core::summarizer::embed_batch(&prior_lines).ok()?;
 
         const LINE_MATCH_THRESHOLD: f32 = 0.88;
         let mut new_lines_out: Vec<String> = Vec::new();

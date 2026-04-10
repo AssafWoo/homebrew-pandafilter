@@ -49,7 +49,7 @@ impl Handler for JqHandler {
             }
         }
 
-        let result = ccr_core::summarizer::summarize(output, 40);
+        let result = panda_core::summarizer::summarize(output, 40);
         result.output
     }
 }

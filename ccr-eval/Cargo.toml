@@ -1,16 +1,16 @@
 [package]
-name = "ccr-eval"
+name = "panda-eval"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "ccr-eval"
+name = "panda-eval"
 path = "src/main.rs"
 
 [dependencies]
-ccr-core = { path = "../ccr-core" }
-ccr-sdk  = { path = "../ccr-sdk" }
-ccr      = { path = "../ccr" }
+panda-core = { path = "../ccr-core" }
+panda-sdk  = { path = "../ccr-sdk" }
+panda      = { path = "../ccr" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"

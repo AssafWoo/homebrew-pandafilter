@@ -22,6 +22,6 @@ impl Handler for JournalctlHandler {
         }
         // Anomaly scoring: errors and unique events score highest, routine noise lowest.
         let budget = (lines_in / 3).max(20).min(200);
-        ccr_core::summarizer::summarize(output, budget).output
+        panda_core::summarizer::summarize(output, budget).output
     }
 }

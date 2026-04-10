@@ -1,5 +1,5 @@
 use anyhow::Result;
-use ccr_core::pipeline::Pipeline;
+use panda_core::pipeline::Pipeline;
 use std::io::{self, Read, Write};
 
 pub fn run(command_hint: Option<String>) -> Result<()> {

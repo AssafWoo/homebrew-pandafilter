@@ -32,7 +32,7 @@ mod util;
 mod zoom_store;
 
 #[derive(Parser)]
-#[command(name = "ccr", about = "Cool Cost Reduction — LLM token optimizer", version)]
+#[command(name = "panda", about = "PandaFilter — LLM token optimizer", version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -157,8 +157,8 @@ fn main() {
     // Apply config-driven model selection and extra keep patterns before any BERT use.
     // set_model_name is no-op after first call, so this must run before any summarization.
     if let Ok(config) = config_loader::load_config() {
-        ccr_core::summarizer::set_model_name(&config.global.bert_model);
-        ccr_core::summarizer::set_extra_keep_patterns(config.global.hard_keep_patterns.clone());
+        panda_core::summarizer::set_model_name(&config.global.bert_model);
+        panda_core::summarizer::set_extra_keep_patterns(config.global.hard_keep_patterns.clone());
     }
 
     let cli = Cli::parse();
@@ -168,7 +168,7 @@ fn main() {
         Commands::Doctor => cmd::doctor::run(),
         Commands::Hook => hook::run(),
         Commands::Init { uninstall, agent } => match (uninstall, agent) {
-            (true,  AgentTarget::Claude)  => uninstall_ccr(),
+            (true,  AgentTarget::Claude)  => uninstall_panda(),
             (true,  AgentTarget::Cursor)  => uninstall_cursor(),
             (false, AgentTarget::Claude)  => init(),
             (false, AgentTarget::Cursor)  => init_cursor(),
@@ -194,7 +194,7 @@ fn main() {
             // as version "64" (inferred from "arm64" in the asset URL). brew upgrade
             // then skips the update because it thinks 64 > 0.5.x.
             let has_bad_keg = std::process::Command::new("brew")
-                .args(["--cellar", "assafwoo/pandafilter/ccr"])
+                .args(["--cellar", "assafwoo/pandafilter/pandafilter"])
                 .output()
                 .ok()
                 .and_then(|o| String::from_utf8(o.stdout).ok())
@@ -205,21 +205,21 @@ fn main() {
                 .unwrap_or(false);
 
             if has_bad_keg {
-                println!("ccr update is deprecated — and your install has a known version mismatch.");
+                println!("panda update is deprecated — and your install has a known version mismatch.");
                 println!();
                 println!("Your brew keg is stored as version \"64\" (a one-time bug from an older");
                 println!("formula). brew upgrade won't fix it because 64 > 0.5.x.");
                 println!();
                 println!("Fix it with a one-time reinstall:");
-                println!("  brew reinstall assafwoo/pandafilter/ccr");
+                println!("  brew reinstall assafwoo/pandafilter/pandafilter");
                 println!();
                 println!("After that, future updates work normally with:");
-                println!("  brew upgrade assafwoo/pandafilter/ccr");
+                println!("  brew upgrade pandafilter");
             } else {
-                println!("ccr update is deprecated.");
+                println!("panda update is deprecated.");
                 println!();
                 println!("Update with Homebrew:");
-                println!("  brew update && brew upgrade assafwoo/pandafilter/ccr");
+                println!("  brew update && brew upgrade pandafilter");
             }
             Ok(())
         }
@@ -227,7 +227,7 @@ fn main() {
             cmd::compress::run(&input, output.as_deref(), recent_turns, tier1_turns, ollama.as_deref(), &ollama_model, max_tokens, dry_run, scan_session),
     };
     if let Err(e) = result {
-        eprintln!("ccr error: {}", e);
+        eprintln!("panda error: {}", e);
         std::process::exit(1);
     }
 }
@@ -241,28 +241,28 @@ fn init() -> anyhow::Result<()> {
     let settings_path = home.join(".claude").join("settings.json");
     let hooks_dir = home.join(".claude").join("hooks");
 
-    // Write ccr-rewrite.sh
+    // Write panda-rewrite.sh
     std::fs::create_dir_all(&hooks_dir)?;
-    let rewrite_script_path = hooks_dir.join("ccr-rewrite.sh");
+    let rewrite_script_path = hooks_dir.join("panda-rewrite.sh");
     // Resolve the binary path for use inside the hook script and settings.json.
     // Prefer the same binary that is currently running; fall back to PATH lookup.
-    let ccr_bin = std::env::current_exe()
+    let panda_bin = std::env::current_exe()
         .ok()
-        .unwrap_or_else(|| std::path::PathBuf::from("ccr"));
-    let ccr_bin_str = ccr_bin.to_string_lossy();
+        .unwrap_or_else(|| std::path::PathBuf::from("panda"));
+    let panda_bin_str = panda_bin.to_string_lossy();
 
     let rewrite_script = format!(r#"#!/usr/bin/env bash
 INPUT=$(cat)
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 [ -z "$CMD" ] && exit 0
-REWRITTEN=$(CCR_SESSION_ID=$PPID "{ccr_bin_str}" rewrite "$CMD" 2>/dev/null) || exit 0
+REWRITTEN=$(PANDA_SESSION_ID=$PPID "{panda_bin_str}" rewrite "$CMD" 2>/dev/null) || exit 0
 [ "$CMD" = "$REWRITTEN" ] && exit 0
 ORIGINAL_INPUT=$(echo "$INPUT" | jq -c '.tool_input')
 UPDATED_INPUT=$(echo "$ORIGINAL_INPUT" | jq --arg cmd "$REWRITTEN" '.command = $cmd')
 jq -n --argjson updated "$UPDATED_INPUT" \
   '{{"hookSpecificOutput":{{"hookEventName":"PreToolUse","permissionDecision":"allow",
-    "permissionDecisionReason":"CCR auto-rewrite","updatedInput":$updated}}}}'
-"#, ccr_bin_str = ccr_bin_str);
+    "permissionDecisionReason":"PandaFilter auto-rewrite","updatedInput":$updated}}}}'
+"#, panda_bin_str = panda_bin_str);
     std::fs::write(&rewrite_script_path, rewrite_script)?;
     // chmod +x
     #[cfg(unix)]
@@ -286,29 +286,29 @@ jq -n --argjson updated "$UPDATED_INPUT" \
         serde_json::json!({})
     };
 
-    // CCR_SESSION_ID=$PPID passes Claude Code's PID so all hook invocations
+    // PANDA_SESSION_ID=$PPID passes Claude Code's PID so all hook invocations
     // within one session share the same state file.
-    let ccr_hook_cmd = format!("CCR_SESSION_ID=$PPID {} hook", ccr_bin_str);
-    let ccr_rewrite_cmd = rewrite_script_path.to_string_lossy().to_string();
+    let panda_hook_cmd = format!("PANDA_SESSION_ID=$PPID {} hook", panda_bin_str);
+    let panda_rewrite_cmd = rewrite_script_path.to_string_lossy().to_string();
 
-    // Merge CCR entries into existing hook arrays rather than overwriting them.
+    // Merge PandaFilter entries into existing hook arrays rather than overwriting them.
     // This preserves hooks from other tools (e.g. RTK).
-    merge_hook(&mut settings, "PostToolUse", "Bash", &ccr_hook_cmd);
-    merge_hook(&mut settings, "PostToolUse", "Read", &ccr_hook_cmd);
-    merge_hook(&mut settings, "PostToolUse", "Glob", &ccr_hook_cmd);
-    merge_hook(&mut settings, "PreToolUse",  "Bash", &ccr_rewrite_cmd);
+    merge_hook(&mut settings, "PostToolUse", "Bash", &panda_hook_cmd);
+    merge_hook(&mut settings, "PostToolUse", "Read", &panda_hook_cmd);
+    merge_hook(&mut settings, "PostToolUse", "Glob", &panda_hook_cmd);
+    merge_hook(&mut settings, "PreToolUse",  "Bash", &panda_rewrite_cmd);
 
     let parent = settings_path.parent().unwrap();
     std::fs::create_dir_all(parent)?;
     std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
 
-    println!("CCR hooks installed:");
-    println!("  PostToolUse: {} → {}", ccr_hook_cmd, settings_path.display());
-    println!("  PreToolUse:  {} → {}", ccr_rewrite_cmd, settings_path.display());
+    println!("PandaFilter hooks installed:");
+    println!("  PostToolUse: {} → {}", panda_hook_cmd, settings_path.display());
+    println!("  PreToolUse:  {} → {}", panda_rewrite_cmd, settings_path.display());
 
     // Pre-download the BERT model now so it's ready before the first Claude session.
     println!();
-    if let Err(e) = ccr_core::summarizer::preload_model() {
+    if let Err(e) = panda_core::summarizer::preload_model() {
         eprintln!("warning: could not pre-load BERT model: {e}");
         eprintln!("         it will download automatically on first use.");
     }
@@ -316,7 +316,7 @@ jq -n --argjson updated "$UPDATED_INPUT" \
     Ok(())
 }
 
-fn uninstall_ccr() -> anyhow::Result<()> {
+fn uninstall_panda() -> anyhow::Result<()> {
     use serde_json::Value;
 
     let home = dirs::home_dir()
@@ -324,8 +324,8 @@ fn uninstall_ccr() -> anyhow::Result<()> {
 
     let settings_path = home.join(".claude").join("settings.json");
     let hooks_dir = home.join(".claude").join("hooks");
-    let rewrite_script_path = hooks_dir.join("ccr-rewrite.sh");
-    let hash_file_path = hooks_dir.join(".ccr-hook.sha256");
+    let rewrite_script_path = hooks_dir.join("panda-rewrite.sh");
+    let hash_file_path = hooks_dir.join(".panda-hook.sha256");
 
     // Remove hook script
     if rewrite_script_path.exists() {
@@ -349,7 +349,28 @@ fn uninstall_ccr() -> anyhow::Result<()> {
         println!("Removed {}", hash_file_path.display());
     }
 
-    // Strip CCR entries from settings.json
+    // Also clean up legacy ccr-* files from pre-v0.6.12 installs
+    let legacy_script = hooks_dir.join("ccr-rewrite.sh");
+    let legacy_hash = hooks_dir.join(".ccr-hook.sha256");
+    if legacy_script.exists() {
+        let _ = std::fs::remove_file(&legacy_script);
+        println!("Removed legacy {}", legacy_script.display());
+    }
+    if legacy_hash.exists() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = std::fs::metadata(&legacy_hash) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o644);
+                let _ = std::fs::set_permissions(&legacy_hash, perms);
+            }
+        }
+        let _ = std::fs::remove_file(&legacy_hash);
+        println!("Removed legacy {}", legacy_hash.display());
+    }
+
+    // Strip PandaFilter entries from settings.json
     if settings_path.exists() {
         let content = std::fs::read_to_string(&settings_path)?;
         let mut settings: Value = serde_json::from_str(&content).unwrap_or(serde_json::json!({}));
@@ -358,17 +379,18 @@ fn uninstall_ccr() -> anyhow::Result<()> {
         for event in &events {
             if let Some(arr) = settings["hooks"][event].as_array_mut() {
                 arr.retain(|entry| {
-                    // Remove entries whose hooks list contains a ccr command,
-                    // or whose command field references ccr.
+                    // Remove entries whose hooks list contains a panda or ccr command,
+                    // or whose command field references panda or ccr.
                     let cmd = entry["command"].as_str().unwrap_or("");
-                    if cmd.contains("ccr") {
+                    if cmd.contains("panda") || cmd.contains("ccr") {
                         return false;
                     }
                     if let Some(hooks) = entry["hooks"].as_array() {
-                        let has_ccr = hooks.iter().any(|h| {
-                            h["command"].as_str().unwrap_or("").contains("ccr")
+                        let has_panda = hooks.iter().any(|h| {
+                            let c = h["command"].as_str().unwrap_or("");
+                            c.contains("panda") || c.contains("ccr")
                         });
-                        if has_ccr {
+                        if has_panda {
                             return false;
                         }
                     }
@@ -378,13 +400,13 @@ fn uninstall_ccr() -> anyhow::Result<()> {
         }
 
         std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
-        println!("Removed CCR hooks from {}", settings_path.display());
+        println!("Removed PandaFilter hooks from {}", settings_path.display());
     }
 
     println!();
-    println!("CCR hooks removed. The binary itself can be uninstalled with:");
-    println!("  brew uninstall ccr          # if installed via Homebrew");
-    println!("  cargo uninstall ccr         # if installed via cargo");
+    println!("PandaFilter hooks removed. The binary itself can be uninstalled with:");
+    println!("  brew uninstall pandafilter   # if installed via Homebrew");
+    println!("  cargo uninstall panda        # if installed via cargo");
 
     Ok(())
 }
@@ -401,7 +423,7 @@ fn init_cursor() -> anyhow::Result<()> {
     // Avoids creating a stray ~/.cursor/ on machines that don't use Cursor.
     if !cursor_dir.exists() {
         println!("Cursor not found (no ~/.cursor directory) — skipping Cursor install.");
-        println!("If you install Cursor later, run: ccr init --agent cursor");
+        println!("If you install Cursor later, run: panda init --agent cursor");
         return Ok(());
     }
 
@@ -410,28 +432,28 @@ fn init_cursor() -> anyhow::Result<()> {
 
     std::fs::create_dir_all(&hooks_dir)?;
 
-    let ccr_bin = std::env::current_exe()
+    let panda_bin = std::env::current_exe()
         .ok()
-        .unwrap_or_else(|| std::path::PathBuf::from("ccr"));
-    let ccr_bin_str = ccr_bin.to_string_lossy();
+        .unwrap_or_else(|| std::path::PathBuf::from("panda"));
+    let panda_bin_str = panda_bin.to_string_lossy();
 
     // Cursor preToolUse hook: rewrites commands using Cursor's JSON format.
     // Must return valid JSON on ALL code paths (Cursor rejects empty output).
     let rewrite_script = format!(r#"#!/usr/bin/env bash
-# ccr-hook-version: 1
-# CCR Cursor hook — rewrites commands for token savings.
+# panda-hook-version: 1
+# PandaFilter Cursor hook — rewrites commands for token savings.
 # Cursor requires JSON on ALL code paths — returns {{}} when no rewrite applies.
 INPUT=$(cat)
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 if [ -z "$CMD" ]; then echo '{{}}'; exit 0; fi
-REWRITTEN=$(CCR_SESSION_ID=$PPID "{ccr_bin_str}" rewrite "$CMD" 2>/dev/null) || {{ echo '{{}}'; exit 0; }}
+REWRITTEN=$(PANDA_SESSION_ID=$PPID "{panda_bin_str}" rewrite "$CMD" 2>/dev/null) || {{ echo '{{}}'; exit 0; }}
 if [ "$CMD" = "$REWRITTEN" ]; then echo '{{}}'; exit 0; fi
 ORIGINAL=$(echo "$INPUT" | jq -c '.tool_input')
 UPDATED=$(echo "$ORIGINAL" | jq --arg cmd "$REWRITTEN" '.command = $cmd')
 jq -n --argjson updated "$UPDATED" '{{"permission":"allow","updated_input":$updated}}'
-"#, ccr_bin_str = ccr_bin_str);
+"#, panda_bin_str = panda_bin_str);
 
-    let script_path = hooks_dir.join("ccr-rewrite.sh");
+    let script_path = hooks_dir.join("panda-rewrite.sh");
     std::fs::write(&script_path, &rewrite_script)?;
     #[cfg(unix)]
     {
@@ -446,7 +468,7 @@ jq -n --argjson updated "$UPDATED" '{{"permission":"allow","updated_input":$upda
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let hash_file = hooks_dir.join(".ccr-hook.sha256");
+        let hash_file = hooks_dir.join(".panda-hook.sha256");
         if hash_file.exists() {
             if let Ok(meta) = std::fs::metadata(&hash_file) {
                 let mut perms = meta.permissions();
@@ -467,7 +489,7 @@ jq -n --argjson updated "$UPDATED" '{{"permission":"allow","updated_input":$upda
         serde_json::json!({"version": 1})
     };
 
-    // Strip any existing CCR entries first so re-running init with a new binary
+    // Strip any existing PandaFilter entries first so re-running init with a new binary
     // path replaces rather than accumulates stale entries.
     // Use get_mut (not IndexMut) to avoid inserting phantom null keys.
     for event in &["preToolUse", "postToolUse"] {
@@ -476,7 +498,10 @@ jq -n --argjson updated "$UPDATED" '{{"permission":"allow","updated_input":$upda
             .and_then(|h| h.get_mut(*event))
             .and_then(|e| e.as_array_mut())
         {
-            arr.retain(|e| !e["command"].as_str().unwrap_or("").contains("ccr"));
+            arr.retain(|e| {
+                let cmd = e["command"].as_str().unwrap_or("");
+                !cmd.contains("panda") && !cmd.contains("ccr")
+            });
         }
     }
 
@@ -484,11 +509,11 @@ jq -n --argjson updated "$UPDATED" '{{"permission":"allow","updated_input":$upda
     cursor_insert_hook_entry(
         &mut root,
         "preToolUse",
-        serde_json::json!({"command": "./hooks/ccr-rewrite.sh", "matcher": "Shell"}),
+        serde_json::json!({"command": "./hooks/panda-rewrite.sh", "matcher": "Shell"}),
     );
 
-    // PostToolUse: output compressor (CCR_AGENT=cursor so hook.rs checks ~/.cursor integrity)
-    let hook_cmd = format!("CCR_SESSION_ID=$PPID CCR_AGENT=cursor {} hook", ccr_bin_str);
+    // PostToolUse: output compressor (PANDA_AGENT=cursor so hook.rs checks ~/.cursor integrity)
+    let hook_cmd = format!("PANDA_SESSION_ID=$PPID PANDA_AGENT=cursor {} hook", panda_bin_str);
     cursor_insert_hook_entry(
         &mut root,
         "postToolUse",
@@ -507,12 +532,12 @@ jq -n --argjson updated "$UPDATED" '{{"permission":"allow","updated_input":$upda
 
     std::fs::write(&hooks_json_path, serde_json::to_string_pretty(&root)?)?;
 
-    println!("CCR hooks installed (Cursor):");
+    println!("PandaFilter hooks installed (Cursor):");
     println!("  PreToolUse:  {} → {}", script_path.display(), hooks_json_path.display());
     println!("  PostToolUse: {} → {}", hook_cmd, hooks_json_path.display());
 
     println!();
-    if let Err(e) = ccr_core::summarizer::preload_model() {
+    if let Err(e) = panda_core::summarizer::preload_model() {
         eprintln!("warning: could not pre-load BERT model: {e}");
         eprintln!("         it will download automatically on first use.");
     }
@@ -528,8 +553,8 @@ fn uninstall_cursor() -> anyhow::Result<()> {
 
     let cursor_dir = home.join(".cursor");
     let hooks_dir = cursor_dir.join("hooks");
-    let script_path = hooks_dir.join("ccr-rewrite.sh");
-    let hash_file_path = hooks_dir.join(".ccr-hook.sha256");
+    let script_path = hooks_dir.join("panda-rewrite.sh");
+    let hash_file_path = hooks_dir.join(".panda-hook.sha256");
     let hooks_json_path = cursor_dir.join("hooks.json");
 
     if script_path.exists() {
@@ -551,6 +576,27 @@ fn uninstall_cursor() -> anyhow::Result<()> {
         println!("Removed {}", hash_file_path.display());
     }
 
+    // Also clean up legacy ccr-* files from pre-v0.6.12 installs
+    let legacy_script = hooks_dir.join("ccr-rewrite.sh");
+    let legacy_hash = hooks_dir.join(".ccr-hook.sha256");
+    if legacy_script.exists() {
+        let _ = std::fs::remove_file(&legacy_script);
+        println!("Removed legacy {}", legacy_script.display());
+    }
+    if legacy_hash.exists() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = std::fs::metadata(&legacy_hash) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o644);
+                let _ = std::fs::set_permissions(&legacy_hash, perms);
+            }
+        }
+        let _ = std::fs::remove_file(&legacy_hash);
+        println!("Removed legacy {}", legacy_hash.display());
+    }
+
     if hooks_json_path.exists() {
         let content = std::fs::read_to_string(&hooks_json_path)?;
         let mut root: Value = serde_json::from_str(&content).unwrap_or(serde_json::json!({}));
@@ -558,19 +604,20 @@ fn uninstall_cursor() -> anyhow::Result<()> {
         for event in &["preToolUse", "postToolUse"] {
             if let Some(arr) = root["hooks"][event].as_array_mut() {
                 arr.retain(|entry| {
-                    !entry["command"].as_str().unwrap_or("").contains("ccr")
+                    let cmd = entry["command"].as_str().unwrap_or("");
+                    !cmd.contains("panda") && !cmd.contains("ccr")
                 });
             }
         }
 
         std::fs::write(&hooks_json_path, serde_json::to_string_pretty(&root)?)?;
-        println!("Removed CCR hooks from {}", hooks_json_path.display());
+        println!("Removed PandaFilter hooks from {}", hooks_json_path.display());
     }
 
     println!();
-    println!("CCR Cursor hooks removed. The binary itself can be uninstalled with:");
-    println!("  brew uninstall ccr          # if installed via Homebrew");
-    println!("  cargo uninstall ccr         # if installed via cargo");
+    println!("PandaFilter Cursor hooks removed. The binary itself can be uninstalled with:");
+    println!("  brew uninstall pandafilter   # if installed via Homebrew");
+    println!("  cargo uninstall panda        # if installed via cargo");
 
     Ok(())
 }
@@ -616,12 +663,12 @@ fn cursor_insert_hook_entry(
 // ── New agent helpers ─────────────────────────────────────────────────────────
 
 fn init_agent(agent: &str) -> anyhow::Result<()> {
-    let ccr_bin = std::env::current_exe()
+    let panda_bin = std::env::current_exe()
         .ok()
-        .unwrap_or_else(|| std::path::PathBuf::from("ccr"));
-    let ccr_bin_str = ccr_bin.to_string_lossy().to_string();
+        .unwrap_or_else(|| std::path::PathBuf::from("panda"));
+    let panda_bin_str = panda_bin.to_string_lossy().to_string();
     match crate::agents::get_installer(agent) {
-        Some(installer) => installer.install(&ccr_bin_str),
+        Some(installer) => installer.install(&panda_bin_str),
         None => {
             anyhow::bail!("Unknown agent '{}'. Valid agents: copilot, gemini, cline", agent)
         }
@@ -650,7 +697,7 @@ fn init_all_agents() -> anyhow::Result<()> {
 }
 
 fn uninstall_all_agents() -> anyhow::Result<()> {
-    let _ = uninstall_ccr();
+    let _ = uninstall_panda();
     let _ = uninstall_cursor();
     for agent in &["copilot", "gemini", "cline"] {
         if let Err(e) = uninstall_agent(agent) {

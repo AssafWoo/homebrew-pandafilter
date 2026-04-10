@@ -8,16 +8,16 @@ pub fn run() -> Result<()> {
 
     println!("Claude Code:");
     let claude_tampered = report_status(
-        &home.join(".claude").join("hooks").join("ccr-rewrite.sh"),
+        &home.join(".claude").join("hooks").join("panda-rewrite.sh"),
         &home.join(".claude").join("hooks"),
-        "ccr init",
+        "panda init",
     );
 
     println!("\nCursor:");
     let cursor_tampered = report_status(
-        &home.join(".cursor").join("hooks").join("ccr-rewrite.sh"),
+        &home.join(".cursor").join("hooks").join("panda-rewrite.sh"),
         &home.join(".cursor").join("hooks"),
-        "ccr init --agent cursor",
+        "panda init --agent cursor",
     );
 
     if claude_tampered || cursor_tampered {
@@ -28,7 +28,7 @@ pub fn run() -> Result<()> {
 
 /// Print status for one agent's hook. Returns true if Tampered (caller should exit 1).
 fn report_status(script: &Path, hashdir: &Path, reinstall_cmd: &str) -> bool {
-    let hash_file = hashdir.join(".ccr-hook.sha256");
+    let hash_file = hashdir.join(".panda-hook.sha256");
     match verify_hook(script, hashdir) {
         IntegrityStatus::Verified => {
             println!("  OK  Verified   {}", script.display());

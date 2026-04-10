@@ -1,16 +1,16 @@
 services:
-  ccr-test:
+  panda-test:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: ccr-test:latest
-    container_name: ccr-test
+    image: panda-test:latest
+    container_name: panda-test
     environment:
       # Simulate a real Claude Code user session
       - HOME=/home/testuser
       - TERM=xterm-256color
       # Disable BERT to speed up tests (no GPU, no model download)
-      - CCR_NO_BERT=1
+      - PANDA_NO_BERT=1
     # Run as non-root (matches the Dockerfile USER directive)
     user: testuser
     stdin_open: false

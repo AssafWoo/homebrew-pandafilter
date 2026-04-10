@@ -32,13 +32,13 @@ impl AgentInstaller for CopilotInstaller {
         "VS Code Copilot"
     }
 
-    fn install(&self, ccr_bin: &str) -> anyhow::Result<()> {
+    fn install(&self, panda_bin: &str) -> anyhow::Result<()> {
         let hooks_dir = github_hooks_dir();
         std::fs::create_dir_all(&hooks_dir)?;
 
         // Hook shell script
-        let script_path = hooks_dir.join("ccr-rewrite.sh");
-        let script = generate_copilot_script(ccr_bin);
+        let script_path = hooks_dir.join("panda-rewrite.sh");
+        let script = generate_copilot_script(panda_bin);
         std::fs::write(&script_path, &script)?;
         #[cfg(unix)]
         {
@@ -49,12 +49,12 @@ impl AgentInstaller for CopilotInstaller {
         }
 
         // Hook config JSON
-        let config_path = hooks_dir.join("ccr-rewrite.json");
+        let config_path = hooks_dir.join("panda-rewrite.json");
         let config = serde_json::json!({
             "hooks": {
                 "PreToolUse": [{
                     "type": "command",
-                    "command": "./hooks/ccr-rewrite.sh",
+                    "command": "./hooks/panda-rewrite.sh",
                     "cwd": ".",
                     "timeout": 5
                 }]
@@ -65,13 +65,13 @@ impl AgentInstaller for CopilotInstaller {
         // Copilot instructions file
         let instructions_path = PathBuf::from(".github").join("copilot-instructions.md");
         let instructions = generate_copilot_instructions();
-        // Append CCR block if not already present; don't overwrite existing instructions
+        // Append PandaFilter block if not already present; don't overwrite existing instructions
         let existing = if instructions_path.exists() {
             std::fs::read_to_string(&instructions_path).unwrap_or_default()
         } else {
             String::new()
         };
-        if !existing.contains("ccr-instructions-start") {
+        if !existing.contains("panda-instructions-start") {
             let new_content = if existing.is_empty() {
                 instructions
             } else {
@@ -80,7 +80,7 @@ impl AgentInstaller for CopilotInstaller {
             std::fs::write(&instructions_path, new_content)?;
         }
 
-        println!("CCR hooks installed (VS Code Copilot) — project-scoped:");
+        println!("PandaFilter hooks installed (VS Code Copilot) — project-scoped:");
         println!("  Script:       {}", script_path.display());
         println!("  Hook config:  {}", config_path.display());
         println!("  Instructions: {}", instructions_path.display());
@@ -93,7 +93,7 @@ impl AgentInstaller for CopilotInstaller {
     fn uninstall(&self) -> anyhow::Result<()> {
         let hooks_dir = github_hooks_dir();
 
-        for name in &["ccr-rewrite.sh", "ccr-rewrite.json"] {
+        for name in &["panda-rewrite.sh", "panda-rewrite.json"] {
             let path = hooks_dir.join(name);
             if path.exists() {
                 std::fs::remove_file(&path)?;
@@ -101,18 +101,18 @@ impl AgentInstaller for CopilotInstaller {
             }
         }
 
-        // Remove CCR block from copilot-instructions.md, preserve the rest
+        // Remove PandaFilter block from copilot-instructions.md, preserve the rest
         let instructions_path = PathBuf::from(".github").join("copilot-instructions.md");
         if instructions_path.exists() {
             let content = std::fs::read_to_string(&instructions_path)?;
-            if content.contains("ccr-instructions-start") {
-                let cleaned = remove_ccr_block(&content);
+            if content.contains("panda-instructions-start") {
+                let cleaned = remove_panda_block(&content);
                 if cleaned.trim().is_empty() {
                     std::fs::remove_file(&instructions_path)?;
                     println!("Removed {}", instructions_path.display());
                 } else {
                     std::fs::write(&instructions_path, cleaned)?;
-                    println!("Removed CCR block from {}", instructions_path.display());
+                    println!("Removed PandaFilter block from {}", instructions_path.display());
                 }
             }
         }
@@ -121,46 +121,46 @@ impl AgentInstaller for CopilotInstaller {
     }
 }
 
-fn generate_copilot_script(ccr_bin: &str) -> String {
+fn generate_copilot_script(panda_bin: &str) -> String {
     format!(
         r#"#!/usr/bin/env bash
-# CCR VS Code Copilot PreToolUse hook
+# PandaFilter VS Code Copilot PreToolUse hook
 # Rewrites shell commands for token savings.
 INPUT=$(cat)
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 [ -z "$CMD" ] && exit 0
-REWRITTEN=$(CCR_SESSION_ID=$PPID "{ccr_bin}" rewrite "$CMD" 2>/dev/null) || exit 0
+REWRITTEN=$(PANDA_SESSION_ID=$PPID "{panda_bin}" rewrite "$CMD" 2>/dev/null) || exit 0
 [ "$CMD" = "$REWRITTEN" ] && exit 0
 jq -n --arg cmd "$REWRITTEN" '{{
   "hookSpecificOutput": {{
     "hookEventName": "PreToolUse",
     "permissionDecision": "allow",
-    "permissionDecisionReason": "CCR auto-rewrite",
+    "permissionDecisionReason": "PandaFilter auto-rewrite",
     "updatedInput": {{"command": $cmd}}
   }}
 }}'
 "#,
-        ccr_bin = ccr_bin
+        panda_bin = panda_bin
     )
 }
 
 fn generate_copilot_instructions() -> String {
-    r#"<!-- ccr-instructions-start -->
-## CCR — Token Savings
+    r#"<!-- panda-instructions-start -->
+## PandaFilter — Token Savings
 
-Always prefix shell commands with `ccr run` to minimize token consumption:
-- `ccr run git status` instead of `git status`
-- `ccr run cargo build` instead of `cargo build`
-- `ccr run kubectl get pods` instead of `kubectl get pods`
+Always prefix shell commands with `panda run` to minimize token consumption:
+- `panda run git status` instead of `git status`
+- `panda run cargo build` instead of `cargo build`
+- `panda run kubectl get pods` instead of `kubectl get pods`
 
-Use `ccr gain` to view token savings analytics.
-<!-- ccr-instructions-end -->"#
+Use `panda gain` to view token savings analytics.
+<!-- panda-instructions-end -->"#
         .to_string()
 }
 
-fn remove_ccr_block(content: &str) -> String {
-    let start = "<!-- ccr-instructions-start -->";
-    let end = "<!-- ccr-instructions-end -->";
+fn remove_panda_block(content: &str) -> String {
+    let start = "<!-- panda-instructions-start -->";
+    let end = "<!-- panda-instructions-end -->";
     if let (Some(s), Some(e)) = (content.find(start), content.find(end)) {
         let before = content[..s].trim_end();
         let after = content[e + end.len()..].trim_start();

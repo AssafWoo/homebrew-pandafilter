@@ -4,7 +4,7 @@ pub fn run(id: &str, list: bool) -> Result<()> {
     if list {
         let ids = crate::zoom_store::list_blocks();
         if ids.is_empty() {
-            println!("No zoom blocks available. Run a command through ccr first.");
+            println!("No zoom blocks available. Run a command through panda first.");
         } else {
             for id in ids {
                 println!("{}", id);
@@ -14,7 +14,7 @@ pub fn run(id: &str, list: bool) -> Result<()> {
     }
 
     if id.is_empty() {
-        anyhow::bail!("Usage: ccr expand <ZI_N>  or  ccr expand --list");
+        anyhow::bail!("Usage: panda expand <ZI_N>  or  panda expand --list");
     }
 
     let content = crate::zoom_store::load_block(id)?;

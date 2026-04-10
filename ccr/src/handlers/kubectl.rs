@@ -273,7 +273,7 @@ fn filter_logs(output: &str) -> String {
         return output.to_string();
     }
     let budget = (lines_in / 3).max(20).min(200);
-    ccr_core::summarizer::summarize(output, budget).output
+    panda_core::summarizer::summarize(output, budget).output
 }
 
 fn filter_describe(output: &str) -> String {

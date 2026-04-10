@@ -53,7 +53,7 @@ pub struct PreCache {
 fn cache_path(session_id: &str) -> Option<PathBuf> {
     Some(
         dirs::data_local_dir()?
-            .join("ccr")
+            .join("panda")
             .join("pre_cache")
             .join(format!("{}.json", session_id)),
     )

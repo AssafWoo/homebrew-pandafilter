@@ -16,19 +16,19 @@ fn compute_sha256(path: &Path) -> anyhow::Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-/// Write `<64-hex>  ccr-rewrite.sh\n` to `<hash_dir>/.ccr-hook.sha256`.
+/// Write `<64-hex>  panda-rewrite.sh\n` to `<hash_dir>/.panda-hook.sha256`.
 /// Sets permissions to 0o444 (read-only speed bump against accidental overwrites).
 pub fn write_baseline(script_path: &Path, hash_dir: &Path) -> anyhow::Result<()> {
     let hash = compute_sha256(script_path)?;
     let script_name = script_path
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("ccr-rewrite.sh");
+        .unwrap_or("panda-rewrite.sh");
     // sha256sum-compatible format: two spaces between hash and filename
     let content = format!("{}  {}\n", hash, script_name);
-    let hash_file = hash_dir.join(".ccr-hook.sha256");
+    let hash_file = hash_dir.join(".panda-hook.sha256");
     // The file is written 0o444 (read-only) after each init. Make it writable
-    // before overwriting so that re-running `ccr init` doesn't fail with EACCES.
+    // before overwriting so that re-running `panda init` doesn't fail with EACCES.
     #[cfg(unix)]
     if hash_file.exists() {
         use std::os::unix::fs::PermissionsExt;
@@ -48,7 +48,7 @@ pub fn write_baseline(script_path: &Path, hash_dir: &Path) -> anyhow::Result<()>
 }
 
 pub fn verify_hook(script_path: &Path, hash_dir: &Path) -> IntegrityStatus {
-    let hash_file = hash_dir.join(".ccr-hook.sha256");
+    let hash_file = hash_dir.join(".panda-hook.sha256");
     let script_exists = script_path.exists();
     let hash_exists = hash_file.exists();
 
@@ -82,10 +82,10 @@ pub fn verify_hook(script_path: &Path, hash_dir: &Path) -> IntegrityStatus {
 /// On Tampered: print a warning to stderr and exit(1). Silent for all other states.
 pub fn runtime_check(script_path: &Path, hash_dir: &Path) {
     if let IntegrityStatus::Tampered { expected, actual } = verify_hook(script_path, hash_dir) {
-        eprintln!("ccr: SECURITY WARNING — hook script has been modified!");
+        eprintln!("panda: SECURITY WARNING — hook script has been modified!");
         eprintln!("  expected: {}", expected);
         eprintln!("  actual:   {}", actual);
-        eprintln!("  Run `ccr init` to reinstall, or `ccr verify` for details.");
+        eprintln!("  Run `panda init` to reinstall, or `panda verify` for details.");
         std::process::exit(1);
     }
 }
@@ -96,7 +96,7 @@ mod tests {
     use std::fs;
 
     fn write_script(dir: &std::path::Path, content: &str) -> std::path::PathBuf {
-        let path = dir.join("ccr-rewrite.sh");
+        let path = dir.join("panda-rewrite.sh");
         fs::write(&path, content).unwrap();
         path
     }
@@ -136,7 +136,7 @@ mod tests {
     #[test]
     fn test_not_installed() {
         let tmp = tempfile::tempdir().unwrap();
-        let script = tmp.path().join("ccr-rewrite.sh"); // does not exist
+        let script = tmp.path().join("panda-rewrite.sh"); // does not exist
         assert!(matches!(
             verify_hook(&script, tmp.path()),
             IntegrityStatus::NotInstalled
@@ -176,7 +176,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let script = write_script(tmp.path(), "#!/bin/bash\necho hello\n");
         write_baseline(&script, tmp.path()).unwrap();
-        let hash_file = tmp.path().join(".ccr-hook.sha256");
+        let hash_file = tmp.path().join(".panda-hook.sha256");
         let mode = fs::metadata(&hash_file).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o444, "hash file should be read-only (0o444)");
     }

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use ccr_sdk::{
+use panda_sdk::{
     compressor::{compress, CompressionConfig},
     deduplicator::deduplicate,
     message::Message,
@@ -52,7 +52,7 @@ pub fn run(
                     let out_path = format!("{}.compressed.json", path.display());
                     std::fs::write(&out_path, out)
                         .map_err(|e| anyhow::anyhow!("cannot write to '{}': {}", out_path, e))?;
-                    eprintln!("[ccr compress] wrote compressed output to {}", out_path);
+                    eprintln!("[panda compress] wrote compressed output to {}", out_path);
                 }
                 _ => write_output(out, output)?,
             }
@@ -104,11 +104,11 @@ pub fn run(
                     100.0 * (result.tokens_in - result.tokens_out.min(result.tokens_in)) as f64
                         / result.tokens_in as f64;
                 eprintln!(
-                    "[ccr compress] {} → {} tokens ({:.0}% saved)",
+                    "[panda compress] {} → {} tokens ({:.0}% saved)",
                     result.tokens_in, result.tokens_out, saved_pct
                 );
             }
-            eprintln!("[ccr compress] wrote compressed output to {}", out_path);
+            eprintln!("[panda compress] wrote compressed output to {}", out_path);
         }
         _ => {
             write_output(&json, output)?;
@@ -118,7 +118,7 @@ pub fn run(
                     100.0 * (result.tokens_in - result.tokens_out.min(result.tokens_in)) as f64
                         / result.tokens_in as f64;
                 eprintln!(
-                    "[ccr compress] {} → {} tokens ({:.0}% saved)",
+                    "[panda compress] {} → {} tokens ({:.0}% saved)",
                     result.tokens_in, result.tokens_out, saved_pct
                 );
             }
@@ -360,7 +360,7 @@ mod tests {
         // ~/.claude/projects/ may or may not exist; we just verify the function
         // doesn't panic and returns None when given a nonexistent path by
         // checking the behavior of visit_dir directly with a temp path.
-        let nonexistent = std::path::Path::new("/tmp/ccr_test_nonexistent_dir_xyz");
+        let nonexistent = std::path::Path::new("/tmp/panda_test_nonexistent_dir_xyz");
         let mut best = None;
         visit_dir(nonexistent, &mut best);
         assert!(best.is_none());

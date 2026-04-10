@@ -1,4 +1,4 @@
-# CCR integration test image — single stage to avoid GLIBC version mismatch.
+# PandaFilter integration test image — single stage to avoid GLIBC version mismatch.
 # rust:latest provides the same GLIBC as the build output.
 FROM rust:latest
 
@@ -10,10 +10,10 @@ WORKDIR /src
 COPY . .
 
 # Build the release binary once
-RUN cargo build --release -p ccr 2>&1
+RUN cargo build --release -p panda 2>&1
 
 # Install the binary system-wide
-RUN cp target/release/ccr /usr/local/bin/ccr && chmod +x /usr/local/bin/ccr
+RUN cp target/release/panda /usr/local/bin/panda && chmod +x /usr/local/bin/panda
 
 # Set up a non-root user to simulate a real dev environment
 RUN useradd -m -s /bin/bash testuser

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use ccr_core::analytics::Analytics;
+use panda_core::analytics::Analytics;
 use owo_colors::{OwoColorize, Stream::Stdout, Style};
 use std::collections::BTreeMap;
 
@@ -111,7 +111,7 @@ fn print_summary(records: &[Analytics], breakdown: bool) {
         format!("{}{}", "█".repeat(filled), "░".repeat(empty))
     };
 
-    println!("{}", "CCR Token Savings".if_supports_color(Stdout, |t| t.bold()));
+    println!("{}", "PandaFilter Token Savings".if_supports_color(Stdout, |t| t.bold()));
     println!("{}", "═".repeat(49).if_supports_color(Stdout, |t| t.dimmed()));
     let green_bold = Style::new().bold().green();
     let yellow_bold = Style::new().bold().yellow();
@@ -280,7 +280,7 @@ fn print_summary(records: &[Analytics], breakdown: bool) {
     } else {
         println!(
             "  {}",
-            "Run `ccr gain --breakdown` for per-command details."
+            "Run `panda gain --breakdown` for per-command details."
                 .if_supports_color(Stdout, |t| t.dimmed()),
         );
     }
@@ -293,7 +293,7 @@ fn print_summary(records: &[Analytics], breakdown: bool) {
             println!();
             let yellow_bold = Style::new().bold().yellow();
             println!("{}", "Unoptimized Commands".if_supports_color(Stdout, |t| t.style(yellow_bold)));
-            println!("{}", format!("  Run `ccr discover` for full details · ~{} tokens potential",
+            println!("{}", format!("  Run `panda discover` for full details · ~{} tokens potential",
                 fmt_tokens(total_potential)
             ).if_supports_color(Stdout, |t| t.dimmed()));
             for (cmd, saveable) in &opportunities {
@@ -339,7 +339,7 @@ fn print_history(records: &[Analytics], days: u32) {
     rows.sort_by(|a, b| b.0.cmp(&a.0));
     rows.truncate(days as usize);
 
-    println!("{}", format!("CCR Daily History  (last {} days)", days).if_supports_color(Stdout, |t| t.bold()));
+    println!("{}", format!("PandaFilter Daily History  (last {} days)", days).if_supports_color(Stdout, |t| t.bold()));
     println!("{}", "═".repeat(60).if_supports_color(Stdout, |t| t.dimmed()));
 
     let sep = "─".repeat(60);
@@ -468,7 +468,7 @@ fn normalize_cmd_key(raw: Option<&str>) -> String {
         Some(s) => s,
     };
     // Collapse tool-event labels and bare wrapper names into (pipeline)
-    if s == "(read)" || s == "(glob)" || s == "rtk" || s == "ccr" {
+    if s == "(read)" || s == "(glob)" || s == "rtk" || s == "panda" {
         return "(pipeline)".to_string();
     }
     // Skip leading KEY=VALUE env var assignments
@@ -825,7 +825,7 @@ fn print_insight(records: &[Analytics], days: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ccr_core::analytics::Analytics;
+    use panda_core::analytics::Analytics;
 
     fn make_record(
         cmd: Option<&str>,

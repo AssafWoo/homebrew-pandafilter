@@ -96,7 +96,7 @@ fn filter_logs(output: &str) -> String {
     // Anomaly-based scoring: outlier lines (errors, unique events) score highest.
     // Budget: ~30% of lines, min 20, max 200.
     let budget = (lines_in / 3).max(20).min(200);
-    ccr_core::summarizer::summarize(&cleaned_output, budget).output
+    panda_core::summarizer::summarize(&cleaned_output, budget).output
 }
 
 fn filter_ps(output: &str) -> String {

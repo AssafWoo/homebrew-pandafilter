@@ -2,8 +2,8 @@
 ///
 /// Verifies that context_pressure() ramps correctly, with_pressure() adjusts the
 /// pipeline config, and high-pressure sessions fire BERT sooner.
-use ccr::session::SessionState;
-use ccr_core::config::CcrConfig;
+use panda::session::SessionState;
+use panda_core::config::CcrConfig;
 
 // ── context_pressure() ────────────────────────────────────────────────────────
 
@@ -129,7 +129,7 @@ fn with_pressure_respects_minimum_budget() {
 
 #[test]
 fn pipeline_fires_bert_sooner_under_high_pressure() {
-    use ccr_core::pipeline::Pipeline;
+    use panda_core::pipeline::Pipeline;
 
     // 43 lines: 42 repetitive noise lines + 1 error.
     // 43 < 50 (default threshold) → no BERT at normal pressure.

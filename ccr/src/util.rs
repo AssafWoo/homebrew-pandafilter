@@ -45,7 +45,7 @@ pub fn project_key() -> Option<String> {
 
 /// Append an analytics record to the SQLite analytics database.
 /// Falls back silently on any error (analytics must never break core functionality).
-pub fn append_analytics(analytics: &ccr_core::analytics::Analytics) {
+pub fn append_analytics(analytics: &panda_core::analytics::Analytics) {
     let project_path = crate::analytics_db::current_project_path();
     let _ = crate::analytics_db::append(analytics, &project_path);
 }

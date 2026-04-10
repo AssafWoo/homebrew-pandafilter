@@ -342,7 +342,7 @@ fn get_handler_bert(cmd: &str) -> Option<Box<dyn Handler>> {
     let mut all_texts = reps.clone();
     all_texts.push(binary);  // embed just the binary, not the full cmd with args
 
-    let embeddings = ccr_core::summarizer::embed_batch(&all_texts).ok()?;
+    let embeddings = panda_core::summarizer::embed_batch(&all_texts).ok()?;
     let cmd_emb = embeddings.last()?;
     let rep_embs = &embeddings[..embeddings.len() - 1];
 

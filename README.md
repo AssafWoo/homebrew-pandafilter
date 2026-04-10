@@ -26,7 +26,7 @@
 
 ```bash
 brew tap AssafWoo/pandafilter
-brew install ccr
+brew install pandafilter
 ```
 
 **Linux / any platform:**
@@ -47,7 +47,7 @@ AI coding agents are expensive to run — not because of what you ask them, but 
 
 ## What it does
 
-- Hooks into Claude Code, Cursor, Gemini CLI, Cline, and VS Code Copilot automatically after `ccr init`.
+- Hooks into Claude Code, Cursor, Gemini CLI, Cline, and VS Code Copilot automatically after `panda init`.
 - Filters build logs, test noise, and progress bars before the model ever sees them.
 - Uses BERT embeddings to match unknown commands to the closest handler — nothing falls through silently.
 - Caches repeated commands (git, kubectl, docker, terraform) so the model isn't re-reading stale output.
@@ -57,7 +57,7 @@ AI coding agents are expensive to run — not because of what you ask them, but 
 
 ## Token savings
 
-Numbers from `ccr/tests/handler_benchmarks.rs`. Run `cargo test -p ccr benchmark -- --nocapture` to reproduce, or `ccr gain` to see your own live data.
+Numbers from `ccr/tests/handler_benchmarks.rs`. Run `cargo test -p panda benchmark -- --nocapture` to reproduce, or `panda gain` to see your own live data.
 
 | Operation | Without PandaFilter | With PandaFilter | Savings |
 |-----------|------------:|---------:|:-------:|
@@ -118,40 +118,40 @@ Numbers from `ccr/tests/handler_benchmarks.rs`. Run `cargo test -p ccr benchmark
 
 ## Commands
 
-**`ccr init`** — wire PandaFilter into your agent's hooks:
+**`panda init`** — wire PandaFilter into your agent's hooks:
 
 ```bash
-ccr init                              # Claude Code (default)
-ccr init --agent cursor               # Cursor
-ccr init --agent gemini               # Gemini CLI
-ccr init --agent cline                # Cline (.clinerules in project dir)
-ccr init --agent copilot              # VS Code Copilot
-ccr init --uninstall                  # remove (add --agent <x> for specific agent)
+panda init                              # Claude Code (default)
+panda init --agent cursor               # Cursor
+panda init --agent gemini               # Gemini CLI
+panda init --agent cline                # Cline (.clinerules in project dir)
+panda init --agent copilot              # VS Code Copilot
+panda init --uninstall                  # remove (add --agent <x> for specific agent)
 ```
 
-**`ccr gain`** — see your token savings:
+**`panda gain`** — see your token savings:
 
 ```bash
-ccr gain                    # overall summary
-ccr gain --breakdown        # per-command table
-ccr gain --history          # last 14 days
-ccr gain --insight          # categorized savings + top saves
+panda gain                    # overall summary
+panda gain --breakdown        # per-command table
+panda gain --history          # last 14 days
+panda gain --insight          # categorized savings + top saves
 ```
 
-**`ccr doctor`** — diagnose the full installation in one command (run this first when something seems off).
+**`panda doctor`** — diagnose the full installation in one command (run this first when something seems off).
 
 **Other commands:**
 
 ```bash
-ccr verify                            # check hook integrity for all installed agents
-ccr discover                          # scan Claude history for commands that ran without PandaFilter
-ccr noise                             # show learned noise patterns; --reset to clear
-ccr expand ZI_3                       # print original lines from a collapsed block
-ccr read-file src/main.rs --level auto  # apply read-level filter and print savings
-ccr compress --scan-session           # compress current conversation context
-ccr filter --command cargo            # filter stdin as if it were cargo output
-ccr run git status                    # run through PandaFilter handler manually
-ccr proxy git status                  # run raw (no filtering), record analytics baseline
+panda verify                            # check hook integrity for all installed agents
+panda discover                          # scan Claude history for commands that ran without PandaFilter
+panda noise                             # show learned noise patterns; --reset to clear
+panda expand ZI_3                       # print original lines from a collapsed block
+panda read-file src/main.rs --level auto  # apply read-level filter and print savings
+panda compress --scan-session           # compress current conversation context
+panda filter --command cargo            # filter stdin as if it were cargo output
+panda run git status                    # run through PandaFilter handler manually
+panda proxy git status                  # run raw (no filtering), record analytics baseline
 ```
 
 ---
@@ -161,7 +161,7 @@ ccr proxy git status                  # run raw (no filtering), record analytics
 
 51 handlers (60+ command aliases) in `ccr/src/handlers/`. Lookup cascade:
 
-1. **User filters** — `.ccr/filters.toml` or `~/.config/ccr/filters.toml`
+1. **User filters** — `.panda/filters.toml` or `~/.config/panda/filters.toml`
 2. **Exact match** — direct command name
 3. **Static alias table** — versioned binaries, wrappers, common aliases
 4. **BERT routing** — unknown commands matched by embedding similarity
@@ -250,7 +250,7 @@ Outputs under 15 tokens skip the pipeline entirely. Step 6b falls back to head+t
 <details>
 <summary><strong>Configuration</strong></summary>
 
-Config loaded from: `./ccr.toml` → `~/.config/ccr/config.toml` → embedded default.
+Config loaded from: `./panda.toml` → `~/.config/panda/config.toml` → embedded default.
 
 ```toml
 [global]
@@ -285,14 +285,14 @@ patterns = [
 
 Pattern actions: `Remove`, `Collapse`, `ReplaceWith = "text"`, `TruncateLinesAt = N`, `HeadLines = N`, `TailLines = N`, `MatchOutput = "msg"`, `OnEmpty = "msg"`.
 
-Pricing uses `cost_per_million_tokens` from `ccr.toml` if set, otherwise `ANTHROPIC_MODEL` env var (Opus 4.6: $15, Sonnet 4.6: $3, Haiku 4.5: $0.80), otherwise $3.00.
+Pricing uses `cost_per_million_tokens` from `panda.toml` if set, otherwise `ANTHROPIC_MODEL` env var (Opus 4.6: $15, Sonnet 4.6: $3, Haiku 4.5: $0.80), otherwise $3.00.
 
 </details>
 
 <details>
 <summary><strong>User-defined filters</strong></summary>
 
-Place `filters.toml` at `.ccr/filters.toml` (project-local) or `~/.config/ccr/filters.toml` (global). Project-local overrides global for the same key. Runs before any built-in handler.
+Place `filters.toml` at `.panda/filters.toml` (project-local) or `~/.config/panda/filters.toml` (global). Project-local overrides global for the same key. Runs before any built-in handler.
 
 ```toml
 [commands.myapp]
@@ -313,12 +313,12 @@ unless_pattern = "error"
 <details>
 <summary><strong>Session intelligence</strong></summary>
 
-State tracked via `CCR_SESSION_ID=$PPID`, stored at `~/.local/share/ccr/sessions/<id>.json`.
+State tracked via `PANDA_SESSION_ID=$PPID`, stored at `~/.local/share/panda/sessions/<id>.json`.
 
 - **Result cache** — post-pipeline bytes frozen per input hash; returned identically on repeat calls to prevent prompt cache busts.
 - **Semantic delta** — repeated commands emit only new/changed lines: `[Δ from turn N: +M new, K repeated — ~T tokens saved]`.
 - **Cross-turn dedup** — identical outputs (cosine > 0.92) collapse to `[same output as turn 4 (3m ago) — 1.2k tokens saved]`.
-- **Elastic context** — pipeline pressure scales with session size. At >80% pressure: `[⚠ context near full — run ccr compress --scan-session]`.
+- **Elastic context** — pipeline pressure scales with session size. At >80% pressure: `[⚠ context near full — run panda compress --scan-session]`.
 - **Intent-aware query** — reads the agent's last message from the live session JSONL and uses it as the BERT query.
 
 </details>
@@ -328,19 +328,19 @@ State tracked via `CCR_SESSION_ID=$PPID`, stored at `~/.local/share/ccr/sessions
 
 | Agent | Config | Script |
 |-------|--------|--------|
-| Claude Code | `~/.claude/settings.json` | `~/.claude/hooks/ccr-rewrite.sh` |
-| Cursor | `~/.cursor/hooks.json` | `~/.cursor/hooks/ccr-rewrite.sh` |
-| Gemini CLI | `~/.gemini/hooks.json` | `~/.gemini/ccr-rewrite.sh` |
+| Claude Code | `~/.claude/settings.json` | `~/.claude/hooks/panda-rewrite.sh` |
+| Cursor | `~/.cursor/hooks.json` | `~/.cursor/hooks/panda-rewrite.sh` |
+| Gemini CLI | `~/.gemini/hooks.json` | `~/.gemini/panda-rewrite.sh` |
 | Cline | `.clinerules` (project dir) | — (rules-based) |
-| VS Code Copilot | `~/.vscode/settings.json` | `~/.vscode/extensions/.ccr-hook/ccr-rewrite.sh` |
+| VS Code Copilot | `.github/hooks/panda-rewrite.json` | `.github/hooks/panda-rewrite.sh` |
 
 All agents share the same binary and compression pipeline.
 
-**PreToolUse:** known handler → rewrites to `ccr run <cmd>`; unknown → no-op; already wrapped → no double-wrap; compound commands → each segment rewritten independently.
+**PreToolUse:** known handler → rewrites to `panda run <cmd>`; unknown → no-op; already wrapped → no double-wrap; compound commands → each segment rewritten independently.
 
 **PostToolUse:** Bash → full pipeline; Read → BERT + session dedup; Glob → grouped by directory; Grep → compact paths.
 
-**Hook integrity:** `ccr init` writes SHA-256 baselines (chmod 0o444). PandaFilter verifies at every invocation and exits 1 with a warning if tampered. `ccr verify` checks all installed agents.
+**Hook integrity:** `panda init` writes SHA-256 baselines (chmod 0o444). PandaFilter verifies at every invocation and exits 1 with a warning if tampered. `panda verify` checks all installed agents.
 
 </details>
 
@@ -348,7 +348,7 @@ All agents share the same binary and compression pipeline.
 <summary><strong>Crate overview</strong></summary>
 
 ```
-ccr/        CLI binary — handlers, hooks, session state, commands
+ccr/        CLI binary (panda) — handlers, hooks, session state, commands
 ccr-core/   Core library (no I/O) — pipeline, BERT summarizer, config, analytics
 ccr-sdk/    Conversation compression — tiered compressor, deduplicator, Ollama
 ccr-eval/   Evaluation suite — fixtures against Claude API
@@ -361,16 +361,16 @@ config/     Embedded default filter patterns
 <summary><strong>Uninstall</strong></summary>
 
 ```bash
-ccr init --uninstall                        # Claude Code
-ccr init --agent cursor --uninstall         # Cursor
-ccr init --agent gemini --uninstall         # Gemini CLI
-ccr init --agent cline --uninstall          # Cline
-ccr init --agent copilot --uninstall        # VS Code Copilot
+panda init --uninstall                        # Claude Code
+panda init --agent cursor --uninstall         # Cursor
+panda init --agent gemini --uninstall         # Gemini CLI
+panda init --agent cline --uninstall          # Cline
+panda init --agent copilot --uninstall        # VS Code Copilot
 
-brew uninstall ccr && brew untap AssafWoo/pandafilter   # Homebrew
-# or: cargo uninstall ccr
+brew uninstall pandafilter && brew untap AssafWoo/pandafilter   # Homebrew
+# or: cargo uninstall panda
 
-rm -rf ~/.local/share/ccr                   # analytics + sessions
+rm -rf ~/.local/share/panda                   # analytics + sessions
 rm -rf ~/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2
 ```
 
@@ -387,7 +387,7 @@ No. PandaFilter only removes noise — build logs, module graphs, passing test l
 BERT semantic routing matches against all known handlers. If confidence is high enough the closest handler applies; otherwise output passes through unchanged. PandaFilter never silently drops output.
 
 **How do I verify it's working?**
-`ccr gain` after a session. To inspect what the model received from a specific command: `ccr proxy git log --oneline -20`.
+`panda gain` after a session. To inspect what the model received from a specific command: `panda proxy git log --oneline -20`.
 
 **Does PandaFilter send any data outside my machine?**
 Never. All processing is fully local. BERT runs on-device.

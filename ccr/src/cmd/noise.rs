@@ -26,7 +26,7 @@ pub fn run(reset: bool) -> Result<()> {
             std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default());
 
         // Show other projects that do have data
-        if let Some(projects_dir) = dirs::data_local_dir().map(|d| d.join("ccr").join("projects")) {
+        if let Some(projects_dir) = dirs::data_local_dir().map(|d| d.join("panda").join("projects")) {
             if let Ok(entries) = std::fs::read_dir(&projects_dir) {
                 let others: Vec<String> = entries
                     .filter_map(|e| e.ok())
@@ -41,7 +41,7 @@ pub fn run(reset: bool) -> Result<()> {
                         let promoted = s.patterns.values().filter(|p| p.promoted).count();
                         println!("  {} — {} patterns, {} promoted", &k[..8.min(k.len())], s.patterns.len(), promoted);
                     }
-                    println!("\nRun `ccr noise` from the relevant project directory to inspect.");
+                    println!("\nRun `panda noise` from the relevant project directory to inspect.");
                 }
             }
         }

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use ccr_core::sentence::split_sentences;
-use ccr_core::summarizer::embed_batch;
+use panda_core::sentence::split_sentences;
+use panda_core::summarizer::embed_batch;
 
 use crate::message::Message;
 

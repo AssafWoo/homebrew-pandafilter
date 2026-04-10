@@ -8,9 +8,9 @@ pub mod gemini;
 
 /// Common interface for all agent hook installers.
 pub trait AgentInstaller {
-    /// Install CCR hooks for this agent. `ccr_bin` is the path to the CCR binary.
-    fn install(&self, ccr_bin: &str) -> anyhow::Result<()>;
-    /// Remove CCR hooks for this agent.
+    /// Install PandaFilter hooks for this agent. `panda_bin` is the path to the panda binary.
+    fn install(&self, panda_bin: &str) -> anyhow::Result<()>;
+    /// Remove PandaFilter hooks for this agent.
     fn uninstall(&self) -> anyhow::Result<()>;
     /// Display name for status messages.
     fn name(&self) -> &'static str;

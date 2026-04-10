@@ -1,11 +1,11 @@
 use anyhow::Result;
-use ccr_core::tokens;
+use panda_core::tokens;
 use std::path::PathBuf;
 use std::process::Command;
 
 pub fn run(args: Vec<String>) -> Result<()> {
     if args.is_empty() {
-        anyhow::bail!("ccr run: no command specified");
+        anyhow::bail!("panda run: no command specified");
     }
 
     let cmd_name = args[0].clone();
@@ -44,7 +44,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
                 if !out.ends_with('\n') {
                     println!();
                 }
-                let analytics = ccr_core::analytics::Analytics::new(
+                let analytics = panda_core::analytics::Analytics::new(
                     entry.tokens,
                     0,
                     Some(cmd_name),
@@ -90,7 +90,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
     let tee_path = write_tee(&cmd_name, &raw_output);
 
     // ZI: enable Zoom-In so compressed markers include expand IDs.
-    ccr_core::zoom::enable();
+    panda_core::zoom::enable();
 
     // NL: apply project noise pre-filter before the pipeline sees the output.
     let project_key = crate::util::project_key();
@@ -116,14 +116,14 @@ pub fn run(args: Vec<String>) -> Result<()> {
         // Pipeline fallback for unknown commands
         let config = match crate::config_loader::load_config() {
             Ok(c) => c,
-            Err(_) => ccr_core::config::CcrConfig::default(),
+            Err(_) => panda_core::config::CcrConfig::default(),
         };
         // EC: tighten pipeline proportionally to session context pressure.
         let pressure = {
             let sid_p = crate::session::session_id();
             crate::session::SessionState::load(&sid_p).context_pressure()
         };
-        let pipeline = ccr_core::pipeline::Pipeline::new(config.with_pressure(pressure));
+        let pipeline = panda_core::pipeline::Pipeline::new(config.with_pressure(pressure));
         match pipeline.process(&pipeline_input, Some(&cmd_name), Some(&cmd_name), None) {
             Ok(r) => {
                 // Persist zoom blocks from pipeline fallback.
@@ -165,7 +165,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
     let filtered = if is_content_retrieval {
         filtered
     } else if filtered.lines().count() >= 20 {
-        if let Ok(mut embs) = ccr_core::summarizer::embed_batch(&[filtered.as_str()]) {
+        if let Ok(mut embs) = panda_core::summarizer::embed_batch(&[filtered.as_str()]) {
             if let Some(emb) = embs.pop() {
                 let sid_pre = crate::session::session_id();
                 let session_pre = crate::session::SessionState::load(&sid_pre);
@@ -200,9 +200,9 @@ pub fn run(args: Vec<String>) -> Result<()> {
     let mut session = crate::session::SessionState::load(&sid);
     let filtered = if is_content_retrieval {
         filtered
-    } else if ccr_core::tokens::count_tokens(&filtered) < 30 {
-        let tokens = ccr_core::tokens::count_tokens(&filtered);
-        if let Ok(mut embs) = ccr_core::summarizer::embed_batch(&[filtered.as_str()]) {
+    } else if panda_core::tokens::count_tokens(&filtered) < 30 {
+        let tokens = panda_core::tokens::count_tokens(&filtered);
+        if let Ok(mut embs) = panda_core::summarizer::embed_batch(&[filtered.as_str()]) {
             if let Some(emb) = embs.pop() {
                 session.record(&delta_key, emb, tokens, &filtered, is_state, None);
                 session.save(&sid);
@@ -210,7 +210,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
         }
         filtered
     } else if let Ok(mut embeddings) =
-        ccr_core::summarizer::embed_batch(&[filtered.as_str()])
+        panda_core::summarizer::embed_batch(&[filtered.as_str()])
     {
         if let Some(emb) = embeddings.pop() {
             // State commands (git, kubectl, etc.) use exact-content dedup:
@@ -229,7 +229,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
                     hit.turn, age, hit.tokens_saved
                 )
             } else {
-                let tokens = ccr_core::tokens::count_tokens(&filtered);
+                let tokens = panda_core::tokens::count_tokens(&filtered);
                 session.record(&delta_key, emb, tokens, &filtered, is_state, None);
                 session.save(&sid);
                 filtered
@@ -243,7 +243,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
 
     // PC: write-through — store the filtered result for future cache hits.
     if let Some(ref pck) = pre_cache_key {
-        let tokens_for_cache = ccr_core::tokens::count_tokens(&filtered);
+        let tokens_for_cache = panda_core::tokens::count_tokens(&filtered);
         let mut pc = crate::pre_cache::PreCache::load(&crate::session::session_id());
         pc.evict_old();
         pc.insert(pck.clone(), &filtered, tokens_for_cache);
@@ -275,7 +275,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
     }
 
     // Record analytics
-    let analytics = ccr_core::analytics::Analytics::new(
+    let analytics = panda_core::analytics::Analytics::new(
         input_tokens,
         output_tokens,
         Some(cmd_name),
@@ -294,7 +294,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
 }
 
 fn write_tee(cmd: &str, content: &str) -> Option<PathBuf> {
-    let tee_dir = dirs::data_local_dir()?.join("ccr").join("tee");
+    let tee_dir = dirs::data_local_dir()?.join("panda").join("tee");
     std::fs::create_dir_all(&tee_dir).ok()?;
 
     // Rotate: keep max 20 files
@@ -335,6 +335,6 @@ fn write_tee(cmd: &str, content: &str) -> Option<PathBuf> {
     Some(path)
 }
 
-fn append_analytics(analytics: &ccr_core::analytics::Analytics) {
+fn append_analytics(analytics: &panda_core::analytics::Analytics) {
     crate::util::append_analytics(analytics);
 }

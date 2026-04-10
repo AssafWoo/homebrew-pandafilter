@@ -35,7 +35,7 @@ pub struct ResultCache {
 fn storage_path(session_id: &str) -> Option<PathBuf> {
     Some(
         dirs::data_local_dir()?
-            .join("ccr")
+            .join("panda")
             .join("result_cache")
             .join(format!("{}.json", session_id)),
     )

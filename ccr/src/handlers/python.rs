@@ -31,7 +31,7 @@ impl Handler for PythonHandler {
         }
 
         // > 50 lines, no traceback: BERT summarization
-        let result = ccr_core::summarizer::summarize(output, 40);
+        let result = panda_core::summarizer::summarize(output, 40);
         result.output
     }
 }

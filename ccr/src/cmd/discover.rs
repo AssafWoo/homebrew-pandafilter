@@ -191,11 +191,11 @@ pub fn run() -> Result<()> {
     });
 
     if opportunities.is_empty() {
-        println!("All detected commands are already optimized with ccr run.");
+        println!("All detected commands are already optimized with panda run.");
         return Ok(());
     }
 
-    println!("CCR Discover — Missed Savings");
+    println!("PandaFilter Discover — Missed Savings");
     println!("==============================");
     println!(
         "{:<12} {:>6} {:>10} {:>8}  {}",
@@ -231,10 +231,10 @@ pub fn run() -> Result<()> {
         opportunities.len()
     );
     if !actual_ratios.is_empty() {
-        println!("(* = ratio measured from your actual ccr usage)");
+        println!("(* = ratio measured from your actual panda usage)");
     }
     println!();
-    println!("Run `ccr init` to enable PreToolUse auto-rewriting.");
+    println!("Run `panda init` to enable PreToolUse auto-rewriting.");
 
     Ok(())
 }
@@ -243,7 +243,7 @@ pub fn run() -> Result<()> {
 /// Returns a map of command → actual savings ratio (0.0–1.0).
 fn load_actual_savings_ratios() -> BTreeMap<String, f32> {
     let path = match dirs::data_local_dir() {
-        Some(d) => d.join("ccr").join("analytics.jsonl"),
+        Some(d) => d.join("panda").join("analytics.jsonl"),
         None => return BTreeMap::new(),
     };
 
@@ -256,7 +256,7 @@ fn load_actual_savings_ratios() -> BTreeMap<String, f32> {
     let mut totals: BTreeMap<String, (usize, usize)> = BTreeMap::new();
 
     for line in content.lines() {
-        let Ok(record) = serde_json::from_str::<ccr_core::analytics::Analytics>(line) else {
+        let Ok(record) = serde_json::from_str::<panda_core::analytics::Analytics>(line) else {
             continue;
         };
         if let Some(cmd) = &record.command {
@@ -329,7 +329,7 @@ fn scan_jsonl(path: &Path, by_cmd: &mut BTreeMap<String, (usize, usize)>) {
 
         // Skip already-optimized commands
         let trimmed = cmd.trim();
-        if trimmed.starts_with("ccr ") {
+        if trimmed.starts_with("panda ") {
             continue;
         }
 
@@ -340,7 +340,7 @@ fn scan_jsonl(path: &Path, by_cmd: &mut BTreeMap<String, (usize, usize)>) {
 
         // Count tokens (more accurate than byte length for savings estimation)
         let output_tokens = output_str
-            .map(|o| ccr_core::tokens::count_tokens(o))
+            .map(|o| panda_core::tokens::count_tokens(o))
             .unwrap_or(0);
 
         let entry = by_cmd.entry(first.to_string()).or_insert((0, 0));
@@ -374,7 +374,7 @@ mod tests {
     fn scan_jsonl_counts_tokens_not_bytes() {
         // Build a minimal JSONL line and verify token counting
         use std::io::Write;
-        let dir = std::env::temp_dir().join("ccr_test_discover");
+        let dir = std::env::temp_dir().join("panda_test_discover");
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("test.jsonl");
         let output = "error: something went wrong\nwarning: check the config";
@@ -399,13 +399,13 @@ mod tests {
     }
 
     #[test]
-    fn scan_jsonl_skips_ccr_prefixed_commands() {
+    fn scan_jsonl_skips_panda_prefixed_commands() {
         use std::io::Write;
-        let dir = std::env::temp_dir().join("ccr_test_discover2");
+        let dir = std::env::temp_dir().join("panda_test_discover2");
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("test.jsonl");
         let line = serde_json::json!({
-            "tool_input": {"command": "ccr run cargo build"},
+            "tool_input": {"command": "panda run cargo build"},
             "tool_response": {"output": "some output"}
         });
         let mut f = std::fs::File::create(&file).unwrap();
@@ -414,7 +414,7 @@ mod tests {
 
         let mut by_cmd: BTreeMap<String, (usize, usize)> = BTreeMap::new();
         scan_jsonl(&file, &mut by_cmd);
-        assert!(by_cmd.is_empty(), "ccr-prefixed commands should be skipped");
+        assert!(by_cmd.is_empty(), "panda-prefixed commands should be skipped");
 
         std::fs::remove_dir_all(&dir).ok();
     }

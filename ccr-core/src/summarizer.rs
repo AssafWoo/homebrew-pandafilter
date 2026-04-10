@@ -96,8 +96,8 @@ fn load_model(name: &str) -> anyhow::Result<fastembed::TextEmbedding> {
     use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
     if !bert_is_cached() {
-        eprintln!("[ccr] downloading BERT model ({}, one-time setup)...", name);
-        eprintln!("[ccr] this may take a minute. future runs are instant.");
+        eprintln!("[panda] downloading BERT model ({}, one-time setup)...", name);
+        eprintln!("[panda] this may take a minute. future runs are instant.");
     }
 
     let embedding_model = match name {

@@ -39,9 +39,9 @@ pub struct UserMatchOutput {
 pub fn load_user_filters() -> UserFiltersFile {
     let mut merged = UserFiltersFile::default();
 
-    // 1. Try global config: ~/.config/ccr/filters.toml
+    // 1. Try global config: ~/.config/panda/filters.toml
     if let Some(config_dir) = dirs::config_dir() {
-        let global_path = config_dir.join("ccr").join("filters.toml");
+        let global_path = config_dir.join("panda").join("filters.toml");
         if let Ok(contents) = std::fs::read_to_string(&global_path) {
             if let Ok(parsed) = toml::from_str::<UserFiltersFile>(&contents) {
                 for (k, v) in parsed.commands {
@@ -51,9 +51,9 @@ pub fn load_user_filters() -> UserFiltersFile {
         }
     }
 
-    // 2. Try project-local: .ccr/filters.toml (from cwd)
+    // 2. Try project-local: .panda/filters.toml (from cwd)
     if let Ok(cwd) = std::env::current_dir() {
-        let local_path = cwd.join(".ccr").join("filters.toml");
+        let local_path = cwd.join(".panda").join("filters.toml");
         if let Ok(contents) = std::fs::read_to_string(&local_path) {
             if let Ok(parsed) = toml::from_str::<UserFiltersFile>(&contents) {
                 for (k, v) in parsed.commands {

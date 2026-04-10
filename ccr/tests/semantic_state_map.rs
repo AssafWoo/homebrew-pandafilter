@@ -2,8 +2,8 @@
 ///
 /// Verifies subcommand-aware delta keys, full-content storage for state commands,
 /// richer delta output format, and serde backward compatibility.
-use ccr::session::SessionState;
-use ccr_core::summarizer::embed_batch;
+use panda::session::SessionState;
+use panda_core::summarizer::embed_batch;
 
 fn embed(text: &str) -> Vec<f32> {
     embed_batch(&[text]).unwrap().pop().unwrap()
@@ -207,7 +207,7 @@ fn session_with_missing_state_content_deserializes_ok() {
 
 #[test]
 fn state_commands_default_includes_git_and_kubectl() {
-    let config = ccr_core::config::CcrConfig::default();
+    let config = panda_core::config::CcrConfig::default();
     assert!(
         config.global.state_commands.iter().any(|s| s == "git"),
         "git must be in default state_commands"
@@ -224,7 +224,7 @@ fn state_commands_can_be_overridden_in_toml() {
 [global]
 state_commands = ["custom_tool", "my_status"]
 "#;
-    let config: ccr_core::config::CcrConfig = toml::from_str(toml_str).unwrap();
+    let config: panda_core::config::CcrConfig = toml::from_str(toml_str).unwrap();
     assert!(config.global.state_commands.contains(&"custom_tool".to_string()));
     assert!(
         !config.global.state_commands.contains(&"git".to_string()),

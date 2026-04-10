@@ -1,13 +1,13 @@
 //! Persistence layer for Zoom-In blocks.
 //!
-//! Blocks are stored at: ~/.local/share/ccr/expand/{session_id}/ZI_N.txt
+//! Blocks are stored at: ~/.local/share/panda/expand/{session_id}/ZI_N.txt
 //! The expand command searches all session directories for a given ID.
 
-use ccr_core::zoom::ZoomBlock;
+use panda_core::zoom::ZoomBlock;
 use std::path::PathBuf;
 
 fn expand_dir() -> Option<PathBuf> {
-    Some(dirs::data_local_dir()?.join("ccr").join("expand"))
+    Some(dirs::data_local_dir()?.join("panda").join("expand"))
 }
 
 fn session_expand_dir(session_id: &str) -> Option<PathBuf> {
@@ -35,7 +35,7 @@ pub fn load_block(id: &str) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow::anyhow!("cannot determine data directory"))?;
 
     if !base.exists() {
-        anyhow::bail!("No expand blocks found. Run a command through ccr first.");
+        anyhow::bail!("No expand blocks found. Run a command through panda first.");
     }
 
     for entry in std::fs::read_dir(&base)? {

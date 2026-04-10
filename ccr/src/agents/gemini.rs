@@ -34,15 +34,15 @@ impl AgentInstaller for GeminiInstaller {
         "Gemini CLI"
     }
 
-    fn install(&self, ccr_bin: &str) -> anyhow::Result<()> {
+    fn install(&self, panda_bin: &str) -> anyhow::Result<()> {
         let Some(gemini_dir) = gemini_dir() else {
             anyhow::bail!("Cannot determine Gemini config directory");
         };
         std::fs::create_dir_all(&gemini_dir)?;
 
         // Write hook script
-        let script_path = gemini_dir.join("ccr-rewrite.sh");
-        let script = generate_gemini_script(ccr_bin);
+        let script_path = gemini_dir.join("panda-rewrite.sh");
+        let script = generate_gemini_script(panda_bin);
         std::fs::write(&script_path, &script)?;
         #[cfg(unix)]
         {
@@ -64,19 +64,19 @@ impl AgentInstaller for GeminiInstaller {
             serde_json::json!({})
         };
 
-        // Remove existing CCR entries from BeforeTool
+        // Remove existing PandaFilter entries from BeforeTool
         if let Some(arr) = root
             .get_mut("hooks")
             .and_then(|h| h.get_mut("BeforeTool"))
             .and_then(|e| e.as_array_mut())
         {
             arr.retain(|entry| {
-                !entry["hooks"]
+                let cmd = entry["hooks"]
                     .as_array()
                     .and_then(|hooks| hooks.first())
                     .and_then(|h| h["command"].as_str())
-                    .unwrap_or("")
-                    .contains("ccr")
+                    .unwrap_or("");
+                !cmd.contains("panda") && !cmd.contains("ccr")
             });
         }
 
@@ -113,7 +113,7 @@ impl AgentInstaller for GeminiInstaller {
 
         std::fs::write(&settings_path, serde_json::to_string_pretty(&root)?)?;
 
-        println!("CCR hooks installed (Gemini CLI):");
+        println!("PandaFilter hooks installed (Gemini CLI):");
         println!("  Script:   {}", script_path.display());
         println!("  Settings: {}", settings_path.display());
 
@@ -125,7 +125,7 @@ impl AgentInstaller for GeminiInstaller {
             return Ok(());
         };
 
-        let script_path = gemini_dir.join("ccr-rewrite.sh");
+        let script_path = gemini_dir.join("panda-rewrite.sh");
         if script_path.exists() {
             std::fs::remove_file(&script_path)?;
             println!("Removed {}", script_path.display());
@@ -145,17 +145,17 @@ impl AgentInstaller for GeminiInstaller {
                 .and_then(|e| e.as_array_mut())
             {
                 arr.retain(|entry| {
-                    !entry["hooks"]
+                    let cmd = entry["hooks"]
                         .as_array()
                         .and_then(|hooks| hooks.first())
                         .and_then(|h| h["command"].as_str())
-                        .unwrap_or("")
-                        .contains("ccr")
+                        .unwrap_or("");
+                    !cmd.contains("panda") && !cmd.contains("ccr")
                 });
             }
 
             std::fs::write(&settings_path, serde_json::to_string_pretty(&root)?)?;
-            println!("Removed CCR entries from {}", settings_path.display());
+            println!("Removed PandaFilter entries from {}", settings_path.display());
         }
 
         Ok(())
@@ -164,10 +164,10 @@ impl AgentInstaller for GeminiInstaller {
 
 /// Generate the Gemini CLI PreToolUse hook script.
 /// Always exits 0 — Gemini CLI terminates on non-zero hook exit.
-fn generate_gemini_script(ccr_bin: &str) -> String {
+fn generate_gemini_script(panda_bin: &str) -> String {
     format!(
         r#"#!/usr/bin/env bash
-# CCR Gemini CLI BeforeTool hook
+# PandaFilter Gemini CLI BeforeTool hook
 # Rewrites run_shell_command invocations for token savings.
 # ALWAYS exits 0 — Gemini CLI terminates on non-zero hook exit.
 INPUT=$(cat)
@@ -176,7 +176,7 @@ if [ -z "$CMD" ]; then
   echo '{{"decision": "allow"}}'
   exit 0
 fi
-REWRITTEN=$(CCR_SESSION_ID=$PPID "{ccr_bin}" rewrite "$CMD" 2>/dev/null) || {{
+REWRITTEN=$(PANDA_SESSION_ID=$PPID "{panda_bin}" rewrite "$CMD" 2>/dev/null) || {{
   echo '{{"decision": "allow"}}'
   exit 0
 }}
@@ -191,6 +191,6 @@ jq -n --arg cmd "$REWRITTEN" '{{
   }}
 }}'
 "#,
-        ccr_bin = ccr_bin
+        panda_bin = panda_bin
     )
 }

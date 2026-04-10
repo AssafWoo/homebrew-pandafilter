@@ -17,7 +17,7 @@ Report it privately via GitHub's built-in security advisory system:
 PandaFilter is a CLI tool that sits between Claude Code and your shell. It:
 - Intercepts and rewrites shell commands via a `PreToolUse` hook
 - Reads and compresses tool output via a `PostToolUse` hook
-- Executes commands on your behalf via `ccr run`
+- Executes commands on your behalf via `panda run`
 
 This makes the following attack surfaces especially important:
 
@@ -30,7 +30,7 @@ This makes the following attack surfaces especially important:
 - **`ccr/src/cmd/run.rs`** — Executes commands on behalf of Claude Code
 - **`ccr/src/cmd/rewrite.rs`** — Rewrites commands before execution (injection risk)
 - **`ccr/src/main.rs`** — `init()` writes hooks into `~/.claude/settings.json`
-- **`hooks/ccr-rewrite.sh`** / **`~/.claude/hooks/ccr-rewrite.sh`** — Shell hook that intercepts every Bash tool call in Claude Code
+- **`hooks/panda-rewrite.sh`** / **`~/.claude/hooks/panda-rewrite.sh`** — Shell hook that intercepts every Bash tool call in Claude Code
 
 ### Tier 2: Input Handling
 - **`ccr/src/handlers/*.rs`** — Per-command output filters (parse untrusted command output)

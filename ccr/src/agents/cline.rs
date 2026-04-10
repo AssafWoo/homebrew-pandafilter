@@ -1,7 +1,7 @@
 //! Cline agent installer.
 //!
 //! Cline uses prompt-level rules (`.clinerules`) rather than executable hooks.
-//! `ccr init --agent cline` writes rules to:
+//! `panda init --agent cline` writes rules to:
 //!   - `.clinerules` in the current project directory (project-scoped)
 //!   - `~/.config/cline/rules.md` (global, if --global flag detected)
 //!
@@ -11,14 +11,14 @@ use super::AgentInstaller;
 
 pub struct ClineInstaller;
 
-/// The rules CCR adds to `.clinerules`.
-const CCR_RULES_MARKER_START: &str = "<!-- ccr-rules-start -->";
-const CCR_RULES_MARKER_END: &str = "<!-- ccr-rules-end -->";
+/// The rules PandaFilter adds to `.clinerules`.
+const CCR_RULES_MARKER_START: &str = "<!-- panda-rules-start -->";
+const CCR_RULES_MARKER_END: &str = "<!-- panda-rules-end -->";
 
-fn ccr_rules_block(ccr_bin: &str) -> String {
+fn panda_rules_block(panda_bin: &str) -> String {
     format!(
         r#"{start}
-## CCR Token Optimization Rules
+## PandaFilter Token Optimization Rules
 
 When running shell commands, prefix the following commands with `{bin} run` to enable
 automatic output compression and token savings:
@@ -29,11 +29,11 @@ automatic output compression and token savings:
 - Test runners: `{bin} run npm test`, `{bin} run pytest`, `{bin} run go test ./...`
 - Linters: `{bin} run eslint .`, `{bin} run mypy .`
 
-When you see output containing `[N matching lines collapsed — ccr expand ID]`, you can
+When you see output containing `[N matching lines collapsed — panda expand ID]`, you can
 retrieve the original lines with `{bin} expand ID`.
 {end}
 "#,
-        bin = ccr_bin,
+        bin = panda_bin,
         start = CCR_RULES_MARKER_START,
         end = CCR_RULES_MARKER_END,
     )
@@ -44,13 +44,13 @@ impl AgentInstaller for ClineInstaller {
         "Cline"
     }
 
-    fn install(&self, ccr_bin: &str) -> anyhow::Result<()> {
-        let rules_block = ccr_rules_block(ccr_bin);
+    fn install(&self, panda_bin: &str) -> anyhow::Result<()> {
+        let rules_block = panda_rules_block(panda_bin);
 
         // Project-local .clinerules
         let local_path = std::path::PathBuf::from(".clinerules");
         write_rules_to(&local_path, &rules_block)?;
-        println!("CCR rules written to {}", local_path.display());
+        println!("PandaFilter rules written to {}", local_path.display());
 
         // Global Cline config (~/.config/cline/rules.md)
         if let Some(config_dir) = dirs::config_dir() {
@@ -58,11 +58,11 @@ impl AgentInstaller for ClineInstaller {
             let _ = std::fs::create_dir_all(&cline_dir);
             let global_path = cline_dir.join("rules.md");
             write_rules_to(&global_path, &rules_block)?;
-            println!("CCR rules written to {}", global_path.display());
+            println!("PandaFilter rules written to {}", global_path.display());
         }
 
         println!();
-        println!("Cline will now suggest using `{} run <cmd>` for supported commands.", ccr_bin);
+        println!("Cline will now suggest using `{} run <cmd>` for supported commands.", panda_bin);
         println!("Restart Cline or reload the project for rules to take effect.");
 
         Ok(())
@@ -80,7 +80,7 @@ impl AgentInstaller for ClineInstaller {
     }
 }
 
-/// Append CCR rules to `path`, or replace an existing CCR block.
+/// Append PandaFilter rules to `path`, or replace an existing PandaFilter block.
 fn write_rules_to(path: &std::path::Path, rules: &str) -> anyhow::Result<()> {
     let existing = if path.exists() {
         std::fs::read_to_string(path)?
@@ -89,7 +89,7 @@ fn write_rules_to(path: &std::path::Path, rules: &str) -> anyhow::Result<()> {
     };
 
     let new_content = if existing.contains(CCR_RULES_MARKER_START) {
-        // Replace existing CCR block
+        // Replace existing PandaFilter block
         let start = existing.find(CCR_RULES_MARKER_START).unwrap();
         let end = existing
             .find(CCR_RULES_MARKER_END)
@@ -107,7 +107,7 @@ fn write_rules_to(path: &std::path::Path, rules: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Remove the CCR rules block from `path` (if any).
+/// Remove the PandaFilter rules block from `path` (if any).
 fn remove_rules_from(path: &std::path::Path) -> anyhow::Result<()> {
     if !path.exists() {
         return Ok(());
@@ -129,7 +129,7 @@ fn remove_rules_from(path: &std::path::Path) -> anyhow::Result<()> {
         println!("Removed {}", path.display());
     } else {
         std::fs::write(path, new_content)?;
-        println!("Removed CCR rules from {}", path.display());
+        println!("Removed PandaFilter rules from {}", path.display());
     }
     Ok(())
 }
@@ -143,11 +143,11 @@ mod tests {
     fn write_rules_creates_file() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(".clinerules");
-        let rules = ccr_rules_block("ccr");
+        let rules = panda_rules_block("panda");
         write_rules_to(&path, &rules).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains(CCR_RULES_MARKER_START));
-        assert!(content.contains("ccr run git status"));
+        assert!(content.contains("panda run git status"));
     }
 
     #[test]
@@ -155,7 +155,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(".clinerules");
         std::fs::write(&path, "# My existing rules\n").unwrap();
-        let rules = ccr_rules_block("ccr");
+        let rules = panda_rules_block("panda");
         write_rules_to(&path, &rules).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("My existing rules"));
@@ -167,26 +167,26 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(".clinerules");
         let initial = format!(
-            "# My rules\n\n{}\nold ccr content\n{}\n",
+            "# My rules\n\n{}\nold panda content\n{}\n",
             CCR_RULES_MARKER_START, CCR_RULES_MARKER_END
         );
         std::fs::write(&path, initial).unwrap();
-        let rules = ccr_rules_block("ccr");
+        let rules = panda_rules_block("panda");
         write_rules_to(&path, &rules).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("My rules"));
-        assert!(!content.contains("old ccr content"));
-        assert!(content.contains("ccr run git status"));
+        assert!(!content.contains("old panda content"));
+        assert!(content.contains("panda run git status"));
     }
 
     #[test]
     fn remove_rules_cleans_up() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(".clinerules");
-        let rules = ccr_rules_block("ccr");
+        let rules = panda_rules_block("panda");
         write_rules_to(&path, &rules).unwrap();
         remove_rules_from(&path).unwrap();
-        // File should be removed (was only CCR content)
+        // File should be removed (was only PandaFilter content)
         assert!(!path.exists(), "empty .clinerules should be removed");
     }
 
@@ -195,7 +195,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(".clinerules");
         let content = format!(
-            "# Other rules\nDo something.\n\n{}\nccrblock\n{}\n",
+            "# Other rules\nDo something.\n\n{}\npandablock\n{}\n",
             CCR_RULES_MARKER_START, CCR_RULES_MARKER_END
         );
         std::fs::write(&path, content).unwrap();

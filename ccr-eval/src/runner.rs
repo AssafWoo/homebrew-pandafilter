@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
-use ccr_core::config::CcrConfig;
-use ccr_core::pipeline::Pipeline;
-use ccr_core::tokens::count_tokens;
-use ccr_sdk::compressor::CompressionConfig;
-use ccr_sdk::message::Message;
-use ccr_sdk::ollama::OllamaConfig;
-use ccr_sdk::optimizer::Optimizer;
+use panda_core::config::CcrConfig;
+use panda_core::pipeline::Pipeline;
+use panda_core::tokens::count_tokens;
+use panda_sdk::compressor::CompressionConfig;
+use panda_sdk::message::Message;
+use panda_sdk::ollama::OllamaConfig;
+use panda_sdk::optimizer::Optimizer;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -69,11 +69,11 @@ pub fn run_fixture(txt_path: &Path, qa_path: &Path, api_key: &str) -> Result<Fix
     let input = std::fs::read_to_string(txt_path)?;
     let qa: QaFixture = toml::from_str(&std::fs::read_to_string(qa_path)?)?;
 
-    // Apply command handler filter first (same as the real ccr pipeline does at runtime).
+    // Apply command handler filter first (same as the real panda pipeline does at runtime).
     // Split command_hint on whitespace so "git push" → ["git", "push"] enabling subcmd routing.
     let handler_output = if !qa.command_hint.is_empty() {
         let binary = qa.command_hint.split_whitespace().next().unwrap_or(&qa.command_hint);
-        if let Some(h) = ccr::handlers::get_handler(binary) {
+        if let Some(h) = panda::handlers::get_handler(binary) {
             let fake_args: Vec<String> = qa.command_hint.split_whitespace().map(|s| s.to_string()).collect();
             h.filter(&input, &fake_args)
         } else {
@@ -94,8 +94,8 @@ pub fn run_fixture(txt_path: &Path, qa_path: &Path, api_key: &str) -> Result<Fix
     let lines_in = input.lines().count();
     let lines_out = compressed.lines().count();
     // Re-measure savings against the original raw input (not handler output)
-    let input_tokens = ccr_core::tokens::count_tokens(&input);
-    let output_tokens = ccr_core::tokens::count_tokens(compressed);
+    let input_tokens = panda_core::tokens::count_tokens(&input);
+    let output_tokens = panda_core::tokens::count_tokens(compressed);
     let savings_pct = if input_tokens == 0 { 0.0 } else {
         (input_tokens.saturating_sub(output_tokens)) as f32 / input_tokens as f32 * 100.0
     };
@@ -240,7 +240,7 @@ fn compute_cumulative_tokens(
     tier2_content: &[String], // tier2-compressed content per message index
     config: &CompressionConfig,
 ) -> usize {
-    use ccr_core::summarizer::summarize_message;
+    use panda_core::summarizer::summarize_message;
 
     let n = messages.len();
 
@@ -339,7 +339,7 @@ pub fn run_conv_fixture_compare(path: &Path, api_key: &str) -> Result<ConvCompar
 
     let n = fixture.questions.len() as f32;
     let recall = |hits: usize| if n == 0.0 { 100.0 } else { hits as f32 / n * 100.0 };
-    let snap_savings = |r: &ccr_sdk::compressor::CompressResult| {
+    let snap_savings = |r: &panda_sdk::compressor::CompressResult| {
         if r.tokens_in == 0 { 0.0 } else { (r.tokens_in - r.tokens_out) as f32 / r.tokens_in as f32 * 100.0 }
     };
 

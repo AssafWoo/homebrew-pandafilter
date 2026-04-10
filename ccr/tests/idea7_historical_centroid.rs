@@ -15,14 +15,14 @@
 ///       pub fn update_command_centroid(&mut self, cmd: &str, centroid: Vec<f32>)
 ///   }
 ///
-///   // New function in ccr-core::summarizer:
+///   // New function in panda-core::summarizer:
 ///   pub fn summarize_against_centroid(
 ///       text: &str, budget: usize, historical_centroid: &[f32]
 ///   ) -> SummarizeResult
 ///
-/// Run with: cargo test -p ccr --test idea7_historical_centroid
-use ccr::session::SessionState;
-use ccr_core::summarizer::{embed_batch, summarize_against_centroid};
+/// Run with: cargo test -p panda --test idea7_historical_centroid
+use panda::session::SessionState;
+use panda_core::summarizer::{embed_batch, summarize_against_centroid};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -132,7 +132,7 @@ fn new_line_appears_in_output_against_historical_centroid() {
 /// more aggressively than when scored against the current batch's centroid.
 #[test]
 fn standard_lines_suppressed_more_with_historical_centroid() {
-    use ccr_core::summarizer::summarize;
+    use panda_core::summarizer::summarize;
 
     let standard = standard_cargo_lines();
     let standard_refs: Vec<&str> = standard.iter().map(|s| s.as_str()).collect();
@@ -232,7 +232,7 @@ fn centroid_shifts_after_multiple_updates() {
 /// Empty historical centroid (None) must fall back to plain anomaly scoring.
 #[test]
 fn none_centroid_falls_back_to_plain_summarize() {
-    use ccr_core::summarizer::summarize;
+    use panda_core::summarizer::summarize;
 
     let lines: Vec<String> = (0..250).map(|i| format!("log line {} content here", i)).collect();
     let input = lines.join("\n");

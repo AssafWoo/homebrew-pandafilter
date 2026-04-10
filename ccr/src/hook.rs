@@ -49,16 +49,16 @@ pub fn process(input: &str) -> Result<Option<String>> {
 
 pub fn run() -> Result<()> {
     // Integrity check: warn and exit if hook script has been tampered with.
-    // CCR_AGENT env var is set by Cursor's PostToolUse hook command; default = claude.
-    let agent = std::env::var("CCR_AGENT").unwrap_or_else(|_| "claude".to_string());
+    // PANDA_AGENT env var is set by Cursor's PostToolUse hook command; default = claude.
+    let agent = std::env::var("PANDA_AGENT").unwrap_or_else(|_| "claude".to_string());
     if let Some(home) = dirs::home_dir() {
         let (script, hashdir) = match agent.as_str() {
             "cursor" => (
-                home.join(".cursor").join("hooks").join("ccr-rewrite.sh"),
+                home.join(".cursor").join("hooks").join("panda-rewrite.sh"),
                 home.join(".cursor").join("hooks"),
             ),
             _ => (
-                home.join(".claude").join("hooks").join("ccr-rewrite.sh"),
+                home.join(".claude").join("hooks").join("panda-rewrite.sh"),
                 home.join(".claude").join("hooks"),
             ),
         };
@@ -87,7 +87,7 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
 
     // Skip commands that already went through cmd/run.rs or cmd/filter.rs —
     // those paths record their own analytics and the output is already compressed.
-    if full_cmd.trim_start().starts_with("ccr ") {
+    if full_cmd.trim_start().starts_with("panda ") {
         return Ok(None);
     }
 
@@ -130,7 +130,7 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     // Skip the entire pipeline (including BERT) for trivially small outputs.
     // Commands like `which`, `mkdir`, `wc` produce <15 tokens — nothing to compress.
     const MIN_PIPELINE_TOKENS: usize = 15;
-    if ccr_core::tokens::count_tokens(&output_text) < MIN_PIPELINE_TOKENS {
+    if panda_core::tokens::count_tokens(&output_text) < MIN_PIPELINE_TOKENS {
         return Ok(None);
     }
 
@@ -174,7 +174,7 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         rc.evict_old();
         if let Some(entry) = rc.lookup(&rc_key) {
             let cached_output = entry.output.clone();
-            let analytics = ccr_core::analytics::Analytics::new_cache_hit(
+            let analytics = panda_core::analytics::Analytics::new_cache_hit(
                 entry.input_tokens,
                 entry.output_tokens,
                 command_hint.clone(),
@@ -212,7 +212,7 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     // clocks/counters/UUIDs differ between otherwise identical responses.
     if session.has_recent_entry(&cmd_key, 120) {
         let normalized = strip_temporal_noise(&output_text);
-        if let Ok(mut embs) = ccr_core::summarizer::embed_batch(&[normalized.as_str()]) {
+        if let Ok(mut embs) = panda_core::summarizer::embed_batch(&[normalized.as_str()]) {
             if let Some(emb) = embs.pop() {
                 if let Some(hit) = session.find_similar_recent(&cmd_key, &emb) {
                     let age = crate::session::format_age(hit.age_secs);
@@ -220,9 +220,9 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
                         "[same output as turn {} ({} ago) — {} tokens saved]",
                         hit.turn, age, hit.tokens_saved
                     );
-                    let in_tok = ccr_core::tokens::count_tokens(&output_text);
-                    let out_tok = ccr_core::tokens::count_tokens(&marker);
-                    crate::util::append_analytics(&ccr_core::analytics::Analytics::new(
+                    let in_tok = panda_core::tokens::count_tokens(&output_text);
+                    let out_tok = panda_core::tokens::count_tokens(&marker);
+                    crate::util::append_analytics(&panda_core::analytics::Analytics::new(
                         in_tok, out_tok, command_hint.clone(), None, None,
                     ));
                     return Ok(Some(serde_json::to_string(&HookOutput { output: marker })?));
@@ -242,7 +242,7 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         .map(stability_to_pressure)
         .unwrap_or(0.0);
     let pressure = (session.context_pressure() + stability_pressure).min(1.0);
-    ccr_core::zoom::enable();
+    panda_core::zoom::enable();
 
     // NL: apply pre-filter to remove lines promoted as permanent noise.
     let project_key = crate::util::project_key();
@@ -262,7 +262,7 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         output_text.clone()
     };
 
-    let pipeline = ccr_core::pipeline::Pipeline::new(config.with_pressure(pressure));
+    let pipeline = panda_core::pipeline::Pipeline::new(config.with_pressure(pressure));
     let mut result = match pipeline.process(
         &filtered_text,
         command_hint.as_deref(),
@@ -293,7 +293,7 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     let pipeline_line_count = result.output.lines().count();
 
     let pipeline_emb = if pipeline_line_count >= BERT_MIN_LINES {
-        ccr_core::summarizer::embed_batch(&[result.output.as_str()])
+        panda_core::summarizer::embed_batch(&[result.output.as_str()])
             .ok()
             .and_then(|mut v| v.pop())
     } else {
@@ -326,7 +326,7 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     let after_xdedup = cross_command_dedup(&after_dedup, &cmd_key, &session, &sid, is_state);
 
     // Save any new zoom blocks registered during cross-command dedup.
-    let xdedup_blocks = ccr_core::zoom::drain();
+    let xdedup_blocks = panda_core::zoom::drain();
     if !xdedup_blocks.is_empty() {
         let _ = crate::zoom_store::save_blocks(&sid, xdedup_blocks);
     }
@@ -337,22 +337,22 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         let line_count = after_xdedup.lines().count();
         let reduced_budget = ((line_count as f32 * compression_factor) as usize).max(10);
         if let Some(ref centroid) = centroid_for_c2 {
-            ccr_core::summarizer::summarize_against_centroid(&after_xdedup, reduced_budget, centroid)
+            panda_core::summarizer::summarize_against_centroid(&after_xdedup, reduced_budget, centroid)
                 .output
         } else {
-            ccr_core::summarizer::summarize(&after_xdedup, reduced_budget).output
+            panda_core::summarizer::summarize(&after_xdedup, reduced_budget).output
         }
     } else {
         after_xdedup
     };
 
     if pipeline_line_count >= BERT_MIN_LINES {
-        if let Ok(mut embeddings) = ccr_core::summarizer::embed_batch(&[final_output.as_str()]) {
+        if let Ok(mut embeddings) = panda_core::summarizer::embed_batch(&[final_output.as_str()]) {
             if let Some(emb) = embeddings.pop() {
-                let tokens = ccr_core::tokens::count_tokens(&final_output);
+                let tokens = panda_core::tokens::count_tokens(&final_output);
                 // Compute centroid_delta: cosine similarity of new centroid vs historical.
                 // Stored on the entry so the NEXT invocation can derive stability pressure.
-                let new_centroid = ccr_core::summarizer::compute_output_centroid(&final_output)
+                let new_centroid = panda_core::summarizer::compute_output_centroid(&final_output)
                     .ok()
                     .unwrap_or_else(|| emb.clone());
                 let centroid_delta = historical_centroid
@@ -367,21 +367,21 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
 
     if pressure > 0.80 {
         final_output.push_str(
-            "\n[⚠ context near full — run `ccr compress --scan-session --dry-run` to estimate savings, or `ccr compress --scan-session` to compress]",
+            "\n[⚠ context near full — run `panda compress --scan-session --dry-run` to estimate savings, or `panda compress --scan-session` to compress]",
         );
     }
 
     // Record analytics: use pipeline output tokens (pre-BERT) for input — accurate
     // enough and avoids a BERT dependency for analytics correctness.
-    let input_tokens = ccr_core::tokens::count_tokens(&output_text);
-    let output_tokens = ccr_core::tokens::count_tokens(&final_output);
+    let input_tokens = panda_core::tokens::count_tokens(&output_text);
+    let output_tokens = panda_core::tokens::count_tokens(&final_output);
     // subcommand is the second non-flag token of the real command (already in cmd_key)
     let subcommand = cmd_key
         .split_whitespace()
         .nth(1)
         .filter(|s| !s.starts_with('-'))
         .map(|s| s.to_string());
-    let analytics = ccr_core::analytics::Analytics::new(
+    let analytics = panda_core::analytics::Analytics::new(
         input_tokens,
         output_tokens,
         command_hint,
@@ -438,14 +438,14 @@ fn process_read(hook_input: HookInput) -> Result<Option<String>> {
 
     // Aggressive read mode early-exit — bypasses BERT pipeline entirely
     {
-        use ccr_core::config::ReadMode;
+        use panda_core::config::ReadMode;
         if config.read.mode != ReadMode::Passthrough {
             use crate::handlers::{Handler, read::ReadHandlerLevel};
             let handler = ReadHandlerLevel::from_read_mode(&config.read.mode);
             let filtered = handler.filter(&output_text, &[file_path.clone()]);
-            let in_tok  = ccr_core::tokens::count_tokens(&output_text);
-            let out_tok = ccr_core::tokens::count_tokens(&filtered);
-            crate::util::append_analytics(&ccr_core::analytics::Analytics::new(
+            let in_tok  = panda_core::tokens::count_tokens(&output_text);
+            let out_tok = panda_core::tokens::count_tokens(&filtered);
+            crate::util::append_analytics(&panda_core::analytics::Analytics::new(
                 in_tok, out_tok, Some("(read-level)".to_string()), None, None,
             ));
             return Ok(Some(serde_json::to_string(&HookOutput { output: filtered })?));
@@ -470,8 +470,8 @@ fn process_read(hook_input: HookInput) -> Result<Option<String>> {
     let historical_centroid = session.command_centroid(&file_path).cloned();
     let pressure = session.context_pressure();
 
-    ccr_core::zoom::enable();
-    let pipeline = ccr_core::pipeline::Pipeline::new(config.with_pressure(pressure));
+    panda_core::zoom::enable();
+    let pipeline = panda_core::pipeline::Pipeline::new(config.with_pressure(pressure));
     let result = match pipeline.process(
         &output_text,
         ext_hint.as_deref(),
@@ -487,10 +487,10 @@ fn process_read(hook_input: HookInput) -> Result<Option<String>> {
     // Session dedup using file_path as cmd_key.
     // Threshold scales by file size — see `read_dedup_threshold()`.
     let compressed = if let Ok(mut embs) =
-        ccr_core::summarizer::embed_batch(&[result.output.as_str()])
+        panda_core::summarizer::embed_batch(&[result.output.as_str()])
     {
         if let Some(emb) = embs.pop() {
-            let tokens = ccr_core::tokens::count_tokens(&result.output);
+            let tokens = panda_core::tokens::count_tokens(&result.output);
             let line_count = result.output.lines().count();
             let threshold = read_dedup_threshold(line_count);
             if let Some(hit) = session.find_similar_with_threshold(&file_path, &emb, threshold) {
@@ -511,9 +511,9 @@ fn process_read(hook_input: HookInput) -> Result<Option<String>> {
         result.output
     };
 
-    let input_tokens = ccr_core::tokens::count_tokens(&output_text);
-    let output_tokens = ccr_core::tokens::count_tokens(&compressed);
-    let analytics = ccr_core::analytics::Analytics::new(input_tokens, output_tokens, Some("(read)".to_string()), None, None);
+    let input_tokens = panda_core::tokens::count_tokens(&output_text);
+    let output_tokens = panda_core::tokens::count_tokens(&compressed);
+    let analytics = panda_core::analytics::Analytics::new(input_tokens, output_tokens, Some("(read)".to_string()), None, None);
     crate::util::append_analytics(&analytics);
 
     let hook_output = HookOutput { output: compressed };
@@ -606,9 +606,9 @@ fn process_glob(hook_input: HookInput) -> Result<Option<String>> {
     let compressed = output_lines.join("\n");
 
     // Record in session (use hash prefix as content_preview for dedup)
-    let tokens = ccr_core::tokens::count_tokens(&compressed);
+    let tokens = panda_core::tokens::count_tokens(&compressed);
     let preview = format!("{} {}", list_hash, &compressed[..compressed.len().min(3900)]);
-    if let Ok(mut embs) = ccr_core::summarizer::embed_batch(&[compressed.as_str()]) {
+    if let Ok(mut embs) = panda_core::summarizer::embed_batch(&[compressed.as_str()]) {
         if let Some(emb) = embs.pop() {
             session.entries.push(crate::session::SessionEntry {
                 turn: session.total_turns + 1,
@@ -629,9 +629,9 @@ fn process_glob(hook_input: HookInput) -> Result<Option<String>> {
         }
     }
 
-    let input_tokens = ccr_core::tokens::count_tokens(&output_text);
-    let output_tokens = ccr_core::tokens::count_tokens(&compressed);
-    let analytics = ccr_core::analytics::Analytics::new(input_tokens, output_tokens, Some("(glob)".to_string()), None, None);
+    let input_tokens = panda_core::tokens::count_tokens(&output_text);
+    let output_tokens = panda_core::tokens::count_tokens(&compressed);
+    let analytics = panda_core::analytics::Analytics::new(input_tokens, output_tokens, Some("(glob)".to_string()), None, None);
     crate::util::append_analytics(&analytics);
 
     let hook_output = HookOutput { output: compressed };
@@ -668,9 +668,9 @@ fn process_grep(hook_input: HookInput) -> Result<Option<String>> {
     let args: Vec<String> = vec!["grep".to_string(), pattern];
     let filtered = handler.filter(&output_text, &args);
 
-    let input_tokens = ccr_core::tokens::count_tokens(&output_text);
-    let output_tokens = ccr_core::tokens::count_tokens(&filtered);
-    let analytics = ccr_core::analytics::Analytics::new(
+    let input_tokens = panda_core::tokens::count_tokens(&output_text);
+    let output_tokens = panda_core::tokens::count_tokens(&filtered);
+    let analytics = panda_core::analytics::Analytics::new(
         input_tokens,
         output_tokens,
         Some("(grep-tool)".to_string()),
@@ -690,8 +690,8 @@ fn apply_sentence_dedup(
     _cmd: &str,
     session: &crate::session::SessionState,
 ) -> String {
-    use ccr_sdk::deduplicator::deduplicate;
-    use ccr_sdk::message::Message;
+    use panda_sdk::deduplicator::deduplicate;
+    use panda_sdk::message::Message;
 
     let prior = session.recent_content(8);
     if prior.is_empty() {
@@ -837,11 +837,11 @@ fn categorize_block(lines: &[String]) -> &'static str {
 
 /// Replace generic zoom markers like `[20 matching lines collapsed — ccr expand ZI_1]`
 /// with descriptive ones like `[20 lines: compiler warnings — ccr expand ZI_1]`.
-fn enrich_zoom_labels(output: &str, zoom_blocks: &[ccr_core::zoom::ZoomBlock]) -> String {
+fn enrich_zoom_labels(output: &str, zoom_blocks: &[panda_core::zoom::ZoomBlock]) -> String {
     let mut result = output.to_string();
     for block in zoom_blocks {
         let label = categorize_block(&block.lines);
-        let expand_tag = format!("ccr expand {}", block.id);
+        let expand_tag = format!("panda expand {}", block.id);
         result = result
             .lines()
             .map(|line| {
@@ -910,12 +910,12 @@ fn rebuild_with_suppressions(
                 let para_text = current_para.join("\n");
                 if let Some(&turn) = suppressed.get(para_text.as_str()) {
                     let n = current_para.len();
-                    // Register as a zoom block so `ccr expand ZI_N` works.
-                    let zi_id = ccr_core::zoom::register(
+                    // Register as a zoom block so `panda expand ZI_N` works.
+                    let zi_id = panda_core::zoom::register(
                         current_para.iter().map(|l| l.to_string()).collect(),
                     );
                     output_lines.push(format!(
-                        "[{} lines: already shown (turn {}) — ccr expand {}]",
+                        "[{} lines: already shown (turn {}) — panda expand {}]",
                         n, turn, zi_id
                     ));
                 } else {
@@ -1002,7 +1002,7 @@ fn cross_command_dedup(
         .chain(prior_segments.iter().map(|(_, s)| s.as_str()))
         .collect();
 
-    let embeddings = match ccr_core::summarizer::embed_batch(&all_texts) {
+    let embeddings = match panda_core::summarizer::embed_batch(&all_texts) {
         Ok(e) => e,
         Err(_) => return output.to_string(),
     };

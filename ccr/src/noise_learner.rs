@@ -5,7 +5,7 @@
 //! after ≥ 10 observations are "promoted" to permanent pre-filters, applied
 //! before BERT ever sees them. Patterns evict after 30 days of inactivity.
 //!
-//! Storage: `~/.local/share/ccr/projects/<project_key>/noise.json`
+//! Storage: `~/.local/share/panda/projects/<project_key>/noise.json`
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -44,7 +44,7 @@ pub struct NoiseStore {
 pub fn noise_path(project_key: &str) -> Option<PathBuf> {
     Some(
         dirs::data_local_dir()?
-            .join("ccr")
+            .join("panda")
             .join("projects")
             .join(project_key)
             .join("noise.json"),
@@ -66,7 +66,7 @@ impl NoiseStore {
         }
         let Ok(json) = serde_json::to_string(self) else { return };
         // Atomic write: use a pid-unique temp file to avoid collisions when
-        // multiple ccr processes run concurrently, then rename into place.
+        // multiple panda processes run concurrently, then rename into place.
         let tmp = path.with_file_name(format!(
             "noise.{}.tmp",
             std::process::id()

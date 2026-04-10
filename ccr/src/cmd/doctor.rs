@@ -1,7 +1,7 @@
-//! `ccr doctor` — diagnose a CCR installation.
+//! `panda doctor` — diagnose a PandaFilter installation.
 //!
 //! Checks every layer of the analytics pipeline so users can self-diagnose
-//! the "ccr gain shows 0 runs" problem without filing a bug report.
+//! the "panda gain shows 0 runs" problem without filing a bug report.
 
 use anyhow::Result;
 use owo_colors::{OwoColorize, Stream::Stdout};
@@ -11,13 +11,13 @@ pub fn run() -> Result<()> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("cannot locate home directory"))?;
     let mut any_error = false;
 
-    println!("{}", "CCR Doctor".bold());
+    println!("{}", "PandaFilter Doctor".bold());
     println!("{}", "═".repeat(52));
 
     // ── 1. Hook Setup ─────────────────────────────────────────────────────────
     println!();
     println!("{}", "Hook Setup".bold());
-    let hook_script = home.join(".claude").join("hooks").join("ccr-rewrite.sh");
+    let hook_script = home.join(".claude").join("hooks").join("panda-rewrite.sh");
     let bin_in_hook = check_hook_script(&hook_script, &mut any_error);
     let settings = home.join(".claude").join("settings.json");
     check_settings(&settings, &mut any_error);
@@ -51,13 +51,13 @@ pub fn run() -> Result<()> {
         println!("{}", "All checks passed.".green().bold());
     }
     println!();
-    println!("If ccr gain still shows 0 runs after all checks pass:");
+    println!("If panda gain still shows 0 runs after all checks pass:");
     println!("  1. Commands must be run BY Claude Code (ask it: \"run git status\")");
     println!("     — not typed by you in the terminal");
-    println!("  2. Restart Claude Code after running 'ccr init'");
+    println!("  2. Restart Claude Code after running 'panda init'");
     println!("     — hooks in settings.json only activate at session start");
     println!("  3. Verify manually: ask Claude Code to run a command, then check");
-    println!("     'ccr gain' — Runs should increment");
+    println!("     'panda gain' — Runs should increment");
 
     Ok(())
 }
@@ -99,14 +99,14 @@ fn err(label: &str, detail: &str, fix: &str, any_error: &mut bool) {
     }
 }
 
-/// Check the hook script exists and is executable. Returns the ccr binary path
+/// Check the hook script exists and is executable. Returns the panda binary path
 /// embedded in the script (if parseable).
 fn check_hook_script(script: &Path, any_error: &mut bool) -> Option<PathBuf> {
     if !script.exists() {
         err(
             "Hook script",
             "NOT found — commands won't be rewritten",
-            "run: ccr init   then restart Claude Code",
+            "run: panda init   then restart Claude Code",
             any_error,
         );
         return None;
@@ -136,11 +136,11 @@ fn check_hook_script(script: &Path, any_error: &mut bool) -> Option<PathBuf> {
     extract_bin_path(&content)
 }
 
-/// Parse the ccr binary path out of the rewrite hook script.
+/// Parse the panda binary path out of the rewrite hook script.
 fn extract_bin_path(content: &str) -> Option<PathBuf> {
     for line in content.lines() {
         if line.contains("REWRITTEN=") && line.contains("rewrite") {
-            // Line looks like: REWRITTEN=$(CCR_SESSION_ID=$PPID "/path/to/ccr" rewrite "$CMD" ...)
+            // Line looks like: REWRITTEN=$(PANDA_SESSION_ID=$PPID "/path/to/panda" rewrite "$CMD" ...)
             if let Some(ppid_pos) = line.find("$PPID ") {
                 let after = &line[ppid_pos + 6..];
                 if after.starts_with('"') {
@@ -159,7 +159,7 @@ fn check_settings(settings: &Path, any_error: &mut bool) {
         err(
             "settings.json",
             "NOT found — hooks will never fire",
-            "run: ccr init   then restart Claude Code",
+            "run: panda init   then restart Claude Code",
             any_error,
         );
         return;
@@ -173,27 +173,27 @@ fn check_settings(settings: &Path, any_error: &mut bool) {
         }
     };
 
-    let has_pre = content.contains("ccr-rewrite.sh");
+    let has_pre = content.contains("panda-rewrite.sh");
     let has_post = content.contains("PostToolUse");
 
     if has_pre {
-        ok("settings.json PreToolUse", "ccr-rewrite.sh registered");
+        ok("settings.json PreToolUse", "panda-rewrite.sh registered");
     } else {
         err(
             "settings.json PreToolUse",
             "NOT registered — commands won't be rewritten",
-            "run: ccr init   then restart Claude Code",
+            "run: panda init   then restart Claude Code",
             any_error,
         );
     }
 
     if has_post {
-        ok("settings.json PostToolUse", "ccr hook registered");
+        ok("settings.json PostToolUse", "panda hook registered");
     } else {
         err(
             "settings.json PostToolUse",
             "NOT registered — output won't be filtered",
-            "run: ccr init   then restart Claude Code",
+            "run: panda init   then restart Claude Code",
             any_error,
         );
     }
@@ -232,14 +232,14 @@ fn check_analytics(any_error: &mut bool) {
     if !db_path.exists() {
         err(
             "DB",
-            "NOT created yet — ccr run has never been called",
-            "test now:  ccr run git status",
+            "NOT created yet — panda run has never been called",
+            "test now:  panda run git status",
             any_error,
         );
         println!(
             "     {:<28} {}",
             "",
-            "then re-run 'ccr doctor' — DB should appear and show 1 record".if_supports_color(Stdout, |t| t.dimmed()),
+            "then re-run 'panda doctor' — DB should appear and show 1 record".if_supports_color(Stdout, |t| t.dimmed()),
         );
         println!(
             "     {:<28} {}",
@@ -254,16 +254,16 @@ fn check_analytics(any_error: &mut bool) {
         Ok(records) => {
             let total = records.len();
             if total == 0 {
-                warn("DB records", "0 records — ccr run never succeeded");
+                warn("DB records", "0 records — panda run never succeeded");
                 println!(
                     "     {:<28} {}",
                     "",
-                    "test:  ccr run git status   (should write a record)".if_supports_color(Stdout, |t| t.yellow()),
+                    "test:  panda run git status   (should write a record)".if_supports_color(Stdout, |t| t.yellow()),
                 );
                 println!(
                     "     {:<28} {}",
                     "",
-                    "then:  ccr gain             (should show Runs: 1)".if_supports_color(Stdout, |t| t.dimmed()),
+                    "then:  panda gain             (should show Runs: 1)".if_supports_color(Stdout, |t| t.dimmed()),
                 );
             } else {
                 // Count today's records
@@ -305,14 +305,14 @@ fn check_db_writable(db_path: &Path, any_error: &mut bool) {
 fn check_rewrite() {
     match std::process::Command::new(
         std::env::current_exe()
-            .unwrap_or_else(|_| PathBuf::from("ccr")),
+            .unwrap_or_else(|_| PathBuf::from("panda")),
     )
     .args(["rewrite", "git status"])
     .output()
     {
         Ok(out) if out.status.success() => {
             let rewritten = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if rewritten.starts_with("ccr run ") {
+            if rewritten.starts_with("panda run ") {
                 ok(
                     "'git status'",
                     &format!("→ '{}'", rewritten),
@@ -328,7 +328,7 @@ fn check_rewrite() {
             warn("'git status'", "no rewrite (git handler may be missing)");
         }
         Err(e) => {
-            warn("rewrite check", &format!("could not run ccr rewrite: {}", e));
+            warn("rewrite check", &format!("could not run panda rewrite: {}", e));
         }
     }
 }
@@ -343,18 +343,18 @@ fn check_hook_binary(bin_path: &Path, any_error: &mut bool) {
         err(
             "Binary in hook",
             &format!("{} NOT FOUND", bin_path.display()),
-            "run: ccr init   (rewrites hook with current binary path)",
+            "run: panda init   (rewrites hook with current binary path)",
             any_error,
         );
         println!(
             "     {:<28} {}",
             "",
-            "Common cause: 'brew upgrade ccr' changed the cellar path.".if_supports_color(Stdout, |t| t.dimmed()),
+            "Common cause: 'brew upgrade pandafilter' changed the cellar path.".if_supports_color(Stdout, |t| t.dimmed()),
         );
         println!(
             "     {:<28} {}",
             "",
-            "Fix takes 2 seconds: ccr init && restart Claude Code".if_supports_color(Stdout, |t| t.dimmed()),
+            "Fix takes 2 seconds: panda init && restart Claude Code".if_supports_color(Stdout, |t| t.dimmed()),
         );
     }
 }

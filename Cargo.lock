@@ -350,74 +350,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ccr"
-version = "0.6.11"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "atty",
- "ccr-core",
- "ccr-sdk",
- "clap",
- "dirs 5.0.1",
- "hex",
- "once_cell",
- "owo-colors",
- "predicates",
- "regex",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.18",
- "toml",
-]
-
-[[package]]
-name = "ccr-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "fastembed",
- "once_cell",
- "regex",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tiktoken-rs",
- "toml",
-]
-
-[[package]]
-name = "ccr-eval"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "ccr",
- "ccr-core",
- "ccr-sdk",
- "reqwest",
- "serde",
- "serde_json",
- "toml",
-]
-
-[[package]]
-name = "ccr-sdk"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "ccr-core",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tiktoken-rs",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2026,6 +1958,74 @@ checksum = "d211803b9b6b570f68772237e415a029d5a50c65d382910b879fb19d3271f94d"
 dependencies = [
  "supports-color 2.1.0",
  "supports-color 3.0.2",
+]
+
+[[package]]
+name = "panda"
+version = "0.6.12"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "atty",
+ "clap",
+ "dirs 5.0.1",
+ "hex",
+ "once_cell",
+ "owo-colors",
+ "panda-core",
+ "panda-sdk",
+ "predicates",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml",
+]
+
+[[package]]
+name = "panda-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fastembed",
+ "once_cell",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tiktoken-rs",
+ "toml",
+]
+
+[[package]]
+name = "panda-eval"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "panda",
+ "panda-core",
+ "panda-sdk",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
+name = "panda-sdk"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "panda-core",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tiktoken-rs",
 ]
 
 [[package]]

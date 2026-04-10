@@ -389,7 +389,7 @@ fn filter_passthrough(output: &str) -> String {
 
     // > 500 lines: use BERT semantic summarization
     let budget = 80;
-    let result = ccr_core::summarizer::summarize(output, budget);
+    let result = panda_core::summarizer::summarize(output, budget);
     result.output
 }
 
@@ -403,8 +403,8 @@ impl Handler for ReadHandler {
 
 impl ReadHandlerLevel {
     /// Construct from a `ReadMode` config value.
-    pub fn from_read_mode(mode: &ccr_core::config::ReadMode) -> Self {
-        use ccr_core::config::ReadMode;
+    pub fn from_read_mode(mode: &panda_core::config::ReadMode) -> Self {
+        use panda_core::config::ReadMode;
         let level = match mode {
             ReadMode::Passthrough => ReadLevel::Passthrough,
             ReadMode::Auto        => ReadLevel::Auto,
@@ -667,7 +667,7 @@ mod tests {
 
     #[test]
     fn test_from_read_mode_mapping() {
-        use ccr_core::config::ReadMode;
+        use panda_core::config::ReadMode;
         assert_eq!(ReadHandlerLevel::from_read_mode(&ReadMode::Passthrough).level, ReadLevel::Passthrough);
         assert_eq!(ReadHandlerLevel::from_read_mode(&ReadMode::Auto).level,        ReadLevel::Auto);
         assert_eq!(ReadHandlerLevel::from_read_mode(&ReadMode::Strip).level,       ReadLevel::Strip);

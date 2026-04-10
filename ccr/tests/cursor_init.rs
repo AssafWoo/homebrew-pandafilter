@@ -1,4 +1,4 @@
-/// Integration tests for `ccr init --agent cursor` / `ccr init --agent cursor --uninstall`.
+/// Integration tests for `panda init --agent cursor` / `panda init --agent cursor --uninstall`.
 ///
 /// Each test overrides $HOME with a temporary directory so nothing touches the
 /// real ~/.cursor.  No new dev-dependencies are needed: assert_cmd, tempfile,
@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 fn ccr() -> Command {
-    Command::cargo_bin("ccr").unwrap()
+    Command::cargo_bin("panda").unwrap()
 }
 
 fn cursor_hooks_json(home: &TempDir) -> PathBuf {
@@ -17,10 +17,10 @@ fn cursor_hooks_json(home: &TempDir) -> PathBuf {
 }
 
 fn cursor_script(home: &TempDir) -> PathBuf {
-    home.path().join(".cursor").join("hooks").join("ccr-rewrite.sh")
+    home.path().join(".cursor").join("hooks").join("panda-rewrite.sh")
 }
 
-/// Run `ccr init --agent cursor` with a fake home directory.
+/// Run `panda init --agent cursor` with a fake home directory.
 /// Pre-creates ~/.cursor so the "Cursor not installed" early-exit doesn't trigger.
 fn run_cursor_init(home: &TempDir) {
     fs::create_dir_all(home.path().join(".cursor")).unwrap();
@@ -37,7 +37,7 @@ fn run_cursor_init(home: &TempDir) {
 fn test_cursor_init_creates_script() {
     let home = TempDir::new().unwrap();
     run_cursor_init(&home);
-    assert!(cursor_script(&home).exists(), "ccr-rewrite.sh should exist");
+    assert!(cursor_script(&home).exists(), "panda-rewrite.sh should exist");
 }
 
 // ── 2. Script is executable ───────────────────────────────────────────────────
@@ -65,11 +65,11 @@ fn test_cursor_init_creates_hooks_json() {
     assert_eq!(root["version"], 1, "hooks.json should have version:1");
 
     let pre = root["hooks"]["preToolUse"].as_array().unwrap();
-    let has_ccr = pre.iter().any(|e| {
-        e["command"].as_str().unwrap_or("").contains("ccr-rewrite.sh")
+    let has_panda = pre.iter().any(|e| {
+        e["command"].as_str().unwrap_or("").contains("panda-rewrite.sh")
             && e["matcher"].as_str().unwrap_or("") == "Shell"
     });
-    assert!(has_ccr, "preToolUse should have a Shell entry pointing to ccr-rewrite.sh");
+    assert!(has_panda, "preToolUse should have a Shell entry pointing to panda-rewrite.sh");
 }
 
 // ── 4. PostToolUse entries ─────────────────────────────────────────────────────
@@ -87,7 +87,7 @@ fn test_cursor_init_adds_posttooluse_entries() {
         .iter()
         .filter(|e| {
             let cmd = e["command"].as_str().unwrap_or("");
-            cmd.contains("ccr hook") && cmd.contains("CCR_AGENT=cursor")
+            cmd.contains("panda hook") && cmd.contains("PANDA_AGENT=cursor")
         })
         .filter_map(|e| e["matcher"].as_str())
         .collect();
@@ -109,11 +109,11 @@ fn test_cursor_init_idempotent() {
     let root: serde_json::Value = serde_json::from_str(&content).unwrap();
 
     let pre = root["hooks"]["preToolUse"].as_array().unwrap();
-    let ccr_count = pre
+    let panda_count = pre
         .iter()
-        .filter(|e| e["command"].as_str().unwrap_or("").contains("ccr-rewrite.sh"))
+        .filter(|e| e["command"].as_str().unwrap_or("").contains("panda-rewrite.sh"))
         .count();
-    assert_eq!(ccr_count, 1, "preToolUse should have exactly one CCR entry after two inits");
+    assert_eq!(panda_count, 1, "preToolUse should have exactly one PandaFilter entry after two inits");
 }
 
 // ── 6. Preserves existing entries ─────────────────────────────────────────────
@@ -122,7 +122,7 @@ fn test_cursor_init_idempotent() {
 fn test_cursor_init_preserves_existing_entries() {
     let home = TempDir::new().unwrap();
 
-    // Pre-populate hooks.json with a non-CCR entry
+    // Pre-populate hooks.json with a non-PandaFilter entry
     let cursor_dir = home.path().join(".cursor");
     fs::create_dir_all(&cursor_dir).unwrap();
     let existing = serde_json::json!({
@@ -163,7 +163,7 @@ fn test_cursor_uninstall_removes_script() {
 
     assert!(!cursor_script(&home).exists(), "script should be removed after uninstall");
 
-    let hash_file = home.path().join(".cursor").join("hooks").join(".ccr-hook.sha256");
+    let hash_file = home.path().join(".cursor").join("hooks").join(".panda-hook.sha256");
     assert!(!hash_file.exists(), "hash file should be removed after uninstall");
 }
 
@@ -185,13 +185,13 @@ fn test_cursor_uninstall_strips_hooks_json() {
 
     for event in &["preToolUse", "postToolUse"] {
         if let Some(arr) = root["hooks"][event].as_array() {
-            let has_ccr = arr.iter().any(|e| e["command"].as_str().unwrap_or("").contains("ccr"));
-            assert!(!has_ccr, "{} should have no CCR entries after uninstall", event);
+            let has_panda = arr.iter().any(|e| e["command"].as_str().unwrap_or("").contains("panda"));
+            assert!(!has_panda, "{} should have no PandaFilter entries after uninstall", event);
         }
     }
 }
 
-// ── 9. Default `ccr init` does not touch ~/.cursor ────────────────────────────
+// ── 9. Default `panda init` does not touch ~/.cursor ────────────────────────────
 
 #[test]
 fn test_claude_init_unaffected() {
@@ -205,7 +205,7 @@ fn test_claude_init_unaffected() {
 
     assert!(
         !home.path().join(".cursor").exists(),
-        "ccr init (claude) should not create ~/.cursor"
+        "panda init (claude) should not create ~/.cursor"
     );
 }
 
@@ -230,12 +230,12 @@ fn test_cursor_init_no_cursor_installed() {
     assert!(!home.path().join(".cursor").exists(), "should not create ~/.cursor");
 }
 
-// ── 11. `ccr rewrite unknown-tool` exits 1 ────────────────────────────────────
+// ── 11. `panda rewrite unknown-tool` exits 1 ────────────────────────────────────
 
 #[test]
 fn test_cursor_no_rewrite_exits_nonzero() {
     // This simulates the `|| { echo '{}'; exit 0; }` path in the Cursor hook script.
-    // `ccr rewrite` exits 1 when no rewrite applies; the hook script then returns `{}`.
+    // `panda rewrite` exits 1 when no rewrite applies; the hook script then returns `{}`.
     ccr()
         .args(["rewrite", "totally-unknown-tool-xyz-12345"])
         .assert()

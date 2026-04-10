@@ -34,19 +34,19 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Build Linux binary (native, cached)
-        run: cargo build --release --target x86_64-unknown-linux-gnu -p ccr
+        run: cargo build --release --target x86_64-unknown-linux-gnu -p panda
 
       # Build a thin test image with the pre-compiled binary (~10s, no cargo inside)
       - name: Build test image
         run: |
           docker build \
-            --build-arg CCR_BINARY=target/x86_64-unknown-linux-gnu/release/ccr \
+            --build-arg PANDA_BINARY=target/x86_64-unknown-linux-gnu/release/panda \
             -f docker/Dockerfile.ci \
-            -t ccr-test:latest \
+            -t panda-test:latest \
             .
 
       - name: Run integration tests
-        run: docker run --rm -e CCR_NO_BERT=1 ccr-test:latest
+        run: docker run --rm -e PANDA_NO_BERT=1 panda-test:latest
 
   build:
     name: Build ${{ matrix.target }}
@@ -58,15 +58,15 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
-            asset_name: ccr-macos-arm64
+            asset_name: panda-macos-arm64
             ort_arch: arm64
           - target: x86_64-apple-darwin
             os: macos-latest
-            asset_name: ccr-macos-x86_64
+            asset_name: panda-macos-x86_64
             ort_arch: x86_64
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            asset_name: ccr-linux-x86_64
+            asset_name: panda-linux-x86_64
             ort_arch: ""
 
     steps:
@@ -78,14 +78,14 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p ccr
+        run: cargo build --release --target ${{ matrix.target }} -p panda
 
       - name: Rename binary
-        run: cp target/${{ matrix.target }}/release/ccr ${{ matrix.asset_name }}
+        run: cp target/${{ matrix.target }}/release/panda ${{ matrix.asset_name }}
 
       - name: Smoke test binary
         env:
-          CCR_NO_BERT: "1"
+          PANDA_NO_BERT: "1"
         run: |
           BIN="./${{ matrix.asset_name }}"
 
@@ -99,24 +99,24 @@ jobs:
           # ── Runs natively on aarch64-apple-darwin and x86_64-unknown-linux-gnu ──
 
           # 1. Binary executes and reports correct version
-          $BIN --version | grep -qE "^ccr [0-9]+\.[0-9]+\.[0-9]+"
+          $BIN --version | grep -qE "^panda [0-9]+\.[0-9]+\.[0-9]+"
 
-          # 2. Simulate a Claude Code user: create settings.json, run ccr init
+          # 2. Simulate a Claude Code user: create settings.json, run panda init
           mkdir -p ~/.claude/hooks
           echo '{}' > ~/.claude/settings.json
           $BIN init
 
           # 3. Hook script exists and is executable
-          test -x ~/.claude/hooks/ccr-rewrite.sh
+          test -x ~/.claude/hooks/panda-rewrite.sh
 
-          # 4. ccr verify reports installed (exit 0)
+          # 4. panda verify reports installed (exit 0)
           $BIN verify
 
           # 5. PreToolUse hook script rewrites a supported command
           REWRITE_IN='{"tool_name":"Bash","tool_input":{"command":"git status"}}'
-          REWRITE_OUT=$(echo "$REWRITE_IN" | bash ~/.claude/hooks/ccr-rewrite.sh)
-          echo "$REWRITE_OUT" | grep -q "ccr" \
-            || { echo "rewrite script did not inject ccr: $REWRITE_OUT"; exit 1; }
+          REWRITE_OUT=$(echo "$REWRITE_IN" | bash ~/.claude/hooks/panda-rewrite.sh)
+          echo "$REWRITE_OUT" | grep -q "panda" \
+            || { echo "rewrite script did not inject panda: $REWRITE_OUT"; exit 1; }
 
           # 6. Filter stdin works
           printf '  Refreshing state...\n  Refreshing state...\n  Refreshing state...\nPlan: 1 to add.\n' \
@@ -125,12 +125,12 @@ jobs:
 
           # 7. Run a real git command end-to-end
           git init /tmp/smoke-repo -q
-          git -C /tmp/smoke-repo config user.email "ci@ccr.test"
+          git -C /tmp/smoke-repo config user.email "ci@panda.test"
           git -C /tmp/smoke-repo config user.name "PandaFilter CI"
           git -C /tmp/smoke-repo commit --allow-empty -q -m "init"
           $BIN run git -C /tmp/smoke-repo status
 
-          # 8. ccr gain exits 0 (analytics written by step 7)
+          # 8. panda gain exits 0 (analytics written by step 7)
           $BIN gain
 
           echo "✓ Smoke test passed (${{ matrix.asset_name }})"
@@ -151,8 +151,17 @@ jobs:
           DYLIB=$(find ort-extracted -name "libonnxruntime.*.dylib" ! -path "*.dSYM*" | head -1)
 
           mkdir bundle
-          cp "${{ matrix.asset_name }}" bundle/ccr
+          cp "${{ matrix.asset_name }}" bundle/panda
           cp "$DYLIB" bundle/
+          # Compatibility shim so old `ccr` hooks keep working with a deprecation notice
+          cat > bundle/ccr <<'SHIM'
+#!/usr/bin/env bash
+echo "⚠️  'ccr' has been renamed to 'panda' in v0.6.12." >&2
+echo "   Update your hooks: panda init" >&2
+echo "" >&2
+exec "$(dirname "$0")/panda" "$@"
+SHIM
+          chmod +x bundle/ccr
           tar -czf "${{ matrix.asset_name }}.tar.gz" -C bundle .
 
           echo "Bundle contents:"
@@ -190,21 +199,21 @@ jobs:
 
           # Download both macOS tarballs (release assets may take a moment to appear)
           for ARCH in arm64 x86_64; do
-            FILE="/tmp/ccr-macos-${ARCH}.tar.gz"
+            FILE="/tmp/panda-macos-${ARCH}.tar.gz"
             for i in $(seq 1 10); do
-              curl -fsSL "${BASE}/ccr-macos-${ARCH}.tar.gz" -o "$FILE" && break
-              echo "Waiting for ccr-macos-${ARCH}.tar.gz (attempt $i)..."
+              curl -fsSL "${BASE}/panda-macos-${ARCH}.tar.gz" -o "$FILE" && break
+              echo "Waiting for panda-macos-${ARCH}.tar.gz (attempt $i)..."
               sleep 10
             done
             SIZE=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
             if [ "$SIZE" -lt 102400 ]; then
-              echo "ERROR: ccr-macos-${ARCH}.tar.gz is only ${SIZE} bytes"
+              echo "ERROR: panda-macos-${ARCH}.tar.gz is only ${SIZE} bytes"
               exit 1
             fi
           done
 
-          ARM64_SHA=$(sha256sum /tmp/ccr-macos-arm64.tar.gz | awk '{print $1}')
-          X86_SHA=$(sha256sum /tmp/ccr-macos-x86_64.tar.gz | awk '{print $1}')
+          ARM64_SHA=$(sha256sum /tmp/panda-macos-arm64.tar.gz | awk '{print $1}')
+          X86_SHA=$(sha256sum /tmp/panda-macos-x86_64.tar.gz | awk '{print $1}')
 
           echo "arm64  SHA256: $ARM64_SHA"
           echo "x86_64 SHA256: $X86_SHA"
@@ -213,12 +222,12 @@ jobs:
           sed -i "s|version \"[0-9.]*\"|version \"${TAG#v}\"|g" Formula/pandafilter.rb
 
           # Update download URLs (replace old version tag)
-          sed -i "s|releases/download/v[^/]*/ccr-macos-arm64\.tar\.gz|releases/download/${TAG}/ccr-macos-arm64.tar.gz|g" Formula/pandafilter.rb
-          sed -i "s|releases/download/v[^/]*/ccr-macos-x86_64\.tar\.gz|releases/download/${TAG}/ccr-macos-x86_64.tar.gz|g" Formula/pandafilter.rb
+          sed -i "s|releases/download/v[^/]*/panda-macos-arm64\.tar\.gz|releases/download/${TAG}/panda-macos-arm64.tar.gz|g" Formula/pandafilter.rb
+          sed -i "s|releases/download/v[^/]*/panda-macos-x86_64\.tar\.gz|releases/download/${TAG}/panda-macos-x86_64.tar.gz|g" Formula/pandafilter.rb
 
           # Update SHA256s — match the sha256 line immediately after each URL line
-          sed -i "/ccr-macos-arm64\.tar\.gz/{n; s/sha256 \"[a-f0-9]*/sha256 \"${ARM64_SHA}/}" Formula/pandafilter.rb
-          sed -i "/ccr-macos-x86_64\.tar\.gz/{n; s/sha256 \"[a-f0-9]*/sha256 \"${X86_SHA}/}" Formula/pandafilter.rb
+          sed -i "/panda-macos-arm64\.tar\.gz/{n; s/sha256 \"[a-f0-9]*/sha256 \"${ARM64_SHA}/}" Formula/pandafilter.rb
+          sed -i "/panda-macos-x86_64\.tar\.gz/{n; s/sha256 \"[a-f0-9]*/sha256 \"${X86_SHA}/}" Formula/pandafilter.rb
 
           echo "--- Formula after update ---"
           head -18 Formula/pandafilter.rb

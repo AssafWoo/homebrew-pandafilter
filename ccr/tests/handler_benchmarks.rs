@@ -1,17 +1,17 @@
 //! Handler benchmark tests — realistic large-project fixtures.
 //!
 //! Each benchmark feeds a realistic command output through the handler and compares
-//! token counts before (what Claude sees without CCR) and after (what Claude sees with CCR).
+//! token counts before (what Claude sees without PandaFilter) and after (what Claude sees with PandaFilter).
 //!
 //! Run with:
-//!   cargo test -p ccr benchmark -- --nocapture
+//!   cargo test -p panda benchmark -- --nocapture
 //!
-//! For git status / git log / cargo build the "without CCR" baseline is the command's
+//! For git status / git log / cargo build the "without PandaFilter" baseline is the command's
 //! native verbose output; the handler receives the flag-rewritten form (porcelain /
 //! oneline / --message-format json) and compresses it further. The combination is
-//! the true end-to-end savings a user gets after `ccr init`.
+//! the true end-to-end savings a user gets after `panda init`.
 
-use ccr::handlers::{
+use panda::handlers::{
     biome::BiomeHandler,
     brew::BrewHandler,
     cargo::CargoHandler,
@@ -49,7 +49,7 @@ use ccr::handlers::{
     webpack::WebpackHandler,
     Handler,
 };
-use ccr_core::tokens::count_tokens;
+use panda_core::tokens::count_tokens;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -2037,7 +2037,7 @@ fn benchmark_handlers() {
     ];
 
     println!();
-    println!("{:<30} {:>12} {:>10} {:>10}", "Operation", "Without CCR", "With CCR", "Savings");
+    println!("{:<30} {:>12} {:>10} {:>10}", "Operation", "Without Panda", "With Panda", "Savings");
     println!("{}", "─".repeat(66));
 
     let mut total_in  = 0usize;
@@ -2091,8 +2091,8 @@ fn medium_cargo_test_failure() -> String {
 
 #[test]
 fn benchmark_pipeline_medium_output_threshold() {
-    use ccr_core::config::{CcrConfig, GlobalConfig};
-    use ccr_core::pipeline::Pipeline;
+    use panda_core::config::{CcrConfig, GlobalConfig};
+    use panda_core::pipeline::Pipeline;
 
     let fixture = medium_cargo_test_failure();
     let line_count = fixture.lines().count();
@@ -2115,7 +2115,7 @@ fn benchmark_pipeline_medium_output_threshold() {
 
     println!();
     println!("── Fix 1: Medium output ({} lines, cargo test failure) ──", line_count);
-    println!("{:<30} {:>12} {:>10} {:>10}", "Threshold", "Without CCR", "With CCR", "Savings");
+    println!("{:<30} {:>12} {:>10} {:>10}", "Threshold", "Without Panda", "With Panda", "Savings");
     println!("{}", "─".repeat(66));
     println!("{:<30} {:>12} {:>10} {:>9.0}%", "Old (200-line threshold)", in_tok, out_tok_old, savings_pct(in_tok, out_tok_old));
     println!("{:<30} {:>12} {:>10} {:>9.0}%", "New  (50-line threshold)", in_tok, out_tok_new, savings_pct(in_tok, out_tok_new));
@@ -2142,8 +2142,8 @@ fn benchmark_pipeline_medium_output_threshold() {
 
 #[test]
 fn benchmark_pipeline_short_output_passthrough() {
-    use ccr_core::pipeline::Pipeline;
-    use ccr_core::config::CcrConfig;
+    use panda_core::pipeline::Pipeline;
+    use panda_core::config::CcrConfig;
 
     // 30 lines — well below the new 50-line threshold, must not be compressed
     let fixture: String = (0..30)
@@ -2209,8 +2209,8 @@ fn large_gradle_build() -> String {
 
 #[test]
 fn benchmark_pipeline_chunked_budget() {
-    use ccr_core::config::CcrConfig;
-    use ccr_core::pipeline::Pipeline;
+    use panda_core::config::CcrConfig;
+    use panda_core::pipeline::Pipeline;
 
     let fixture = large_gradle_build();
     let line_count = fixture.lines().count();
@@ -2225,7 +2225,7 @@ fn benchmark_pipeline_chunked_budget() {
 
     println!();
     println!("── Fix 2: Chunked build log ({} lines) ──", line_count);
-    println!("{:<30} {:>12} {:>10} {:>10}", "Pass", "Without CCR", "With CCR", "Savings");
+    println!("{:<30} {:>12} {:>10} {:>10}", "Pass", "Without Panda", "With Panda", "Savings");
     println!("{}", "─".repeat(66));
     println!("{:<30} {:>12} {:>10} {:>9.0}%",
         "Chunked+consolidated", in_tok, out_tok, savings_pct(in_tok, out_tok));
@@ -2263,7 +2263,7 @@ fn benchmark_grep_tool_handler() {
 
     println!();
     println!("── Fix 3: Grep tool (150 matches, 10 files) ──");
-    println!("{:<30} {:>12} {:>10} {:>10}", "Pass", "Without CCR", "With CCR", "Savings");
+    println!("{:<30} {:>12} {:>10} {:>10}", "Pass", "Without Panda", "With Panda", "Savings");
     println!("{}", "─".repeat(66));
     println!("{:<30} {:>12} {:>10} {:>9.0}%",
         "GrepHandler (file:line:content)", in_tok, out_tok, savings_pct(in_tok, out_tok));
@@ -2578,7 +2578,7 @@ fn benchmark_uv_install() {
 
     println!();
     println!("── uv sync (87 packages, large Django+ML project) ──");
-    println!("{:<30} {:>12} {:>10} {:>10}", "Pass", "Without CCR", "With CCR", "Savings");
+    println!("{:<30} {:>12} {:>10} {:>10}", "Pass", "Without Panda", "With Panda", "Savings");
     println!("{}", "─".repeat(66));
     println!("{:<30} {:>12} {:>10} {:>9.0}%",
         "UvHandler", in_tok, out_tok, savings_pct(in_tok, out_tok));
@@ -2606,7 +2606,7 @@ fn benchmark_ruff_check() {
 
     println!();
     println!("── ruff check (10 files, 100 violations, 8 distinct codes) ──");
-    println!("{:<30} {:>12} {:>10} {:>10}", "Pass", "Without CCR", "With CCR", "Savings");
+    println!("{:<30} {:>12} {:>10} {:>10}", "Pass", "Without Panda", "With Panda", "Savings");
     println!("{}", "─".repeat(66));
     println!("{:<30} {:>12} {:>10} {:>9.0}%",
         "RuffHandler", in_tok, out_tok, savings_pct(in_tok, out_tok));
@@ -2633,7 +2633,7 @@ fn benchmark_mypy() {
 
     println!();
     println!("── mypy (8 files, 60 errors, notes interleaved, daemon startup) ──");
-    println!("{:<30} {:>12} {:>10} {:>10}", "Pass", "Without CCR", "With CCR", "Savings");
+    println!("{:<30} {:>12} {:>10} {:>10}", "Pass", "Without Panda", "With Panda", "Savings");
     println!("{}", "─".repeat(66));
     println!("{:<30} {:>12} {:>10} {:>9.0}%",
         "MypyHandler", in_tok, out_tok, savings_pct(in_tok, out_tok));
@@ -2662,7 +2662,7 @@ fn benchmark_nx_run_many() {
 
     println!();
     println!("── nx run-many (20 projects, 1 failing, 10 cached) ──");
-    println!("{:<30} {:>12} {:>10} {:>10}", "Pass", "Without CCR", "With CCR", "Savings");
+    println!("{:<30} {:>12} {:>10} {:>10}", "Pass", "Without Panda", "With Panda", "Savings");
     println!("{}", "─".repeat(66));
     println!("{:<30} {:>12} {:>10} {:>9.0}%",
         "NxHandler", in_tok, out_tok, savings_pct(in_tok, out_tok));

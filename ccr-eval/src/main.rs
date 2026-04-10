@@ -8,19 +8,19 @@ fn main() -> Result<()> {
         .expect("ANTHROPIC_API_KEY must be set");
 
     let fixtures_dir = std::path::PathBuf::from(
-        std::env::var("CCR_FIXTURES_DIR")
+        std::env::var("PANDA_FIXTURES_DIR")
             .unwrap_or_else(|_| {
                 let exe = std::env::current_exe().unwrap();
                 exe.parent().unwrap()
                     .parent().unwrap()
                     .parent().unwrap()
-                    .join("ccr-eval/fixtures")
+                    .join("panda-eval/fixtures")
                     .to_string_lossy()
                     .into_owned()
             })
     );
 
-    println!("CCR Evaluation Report");
+    println!("PandaFilter Evaluation Report");
     println!("=====================");
     println!("Fixtures dir: {}", fixtures_dir.display());
     println!();

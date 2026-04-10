@@ -11,18 +11,18 @@ fn hook_bash_cache_hit_returns_identical_bytes() {
 
     let session_id = format!("test_rc_{}", std::process::id());
 
-    let out1 = Command::cargo_bin("ccr")
+    let out1 = Command::cargo_bin("panda")
         .unwrap()
         .args(["hook"])
-        .env("CCR_SESSION_ID", &session_id)
+        .env("PANDA_SESSION_ID", &session_id)
         .write_stdin(json.clone())
         .output()
         .unwrap();
 
-    let out2 = Command::cargo_bin("ccr")
+    let out2 = Command::cargo_bin("panda")
         .unwrap()
         .args(["hook"])
-        .env("CCR_SESSION_ID", &session_id)
+        .env("PANDA_SESSION_ID", &session_id)
         .write_stdin(json)
         .output()
         .unwrap();

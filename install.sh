@@ -15,14 +15,14 @@ if [[ "$(uname)" == "Darwin" ]] && command -v brew &>/dev/null; then
   # Detect the "64" bad-keg: older installs stored the keg as version "64"
   # (inferred from "arm64" in the asset URL). brew upgrade skips it because
   # 64 > 0.5.x. Force a reinstall to fix the keg name once and for all.
-  CELLAR="$(brew --cellar assafwoo/pandafilter/ccr 2>/dev/null || true)"
+  CELLAR="$(brew --cellar assafwoo/pandafilter/pandafilter 2>/dev/null || true)"
   if [[ -n "$CELLAR" && -d "$CELLAR/64" ]]; then
     echo "Detected stale keg (version \"64\") — reinstalling to fix..."
-    brew reinstall assafwoo/pandafilter/ccr
-  elif brew list assafwoo/pandafilter/ccr &>/dev/null 2>&1; then
-    brew upgrade assafwoo/pandafilter/ccr || true
+    brew reinstall assafwoo/pandafilter/pandafilter
+  elif brew list assafwoo/pandafilter/pandafilter &>/dev/null 2>&1; then
+    brew upgrade assafwoo/pandafilter/pandafilter || true
   else
-    brew install assafwoo/pandafilter/ccr
+    brew install assafwoo/pandafilter/pandafilter
   fi
 
   echo ""
@@ -40,7 +40,7 @@ if ! command -v cargo &>/dev/null; then
 fi
 
 echo "Building PandaFilter from source (this takes ~1 min on first run)..."
-cargo install --git "$REPO_URL" --bin ccr --locked 2>&1
+cargo install --git "$REPO_URL" --bin panda --locked 2>&1
 
 # ── Ensure ~/.cargo/bin is on PATH ────────────────────────────────────────────
 
@@ -68,12 +68,12 @@ fi
 # ── Register Claude Code hooks ────────────────────────────────────────────────
 
 echo ""
-if command -v ccr &>/dev/null; then
-  ccr init && echo "Claude Code hooks registered."
-elif [ -x "$CARGO_BIN/ccr" ]; then
-  "$CARGO_BIN/ccr" init && echo "Claude Code hooks registered."
+if command -v panda &>/dev/null; then
+  panda init && echo "Claude Code hooks registered."
+elif [ -x "$CARGO_BIN/panda" ]; then
+  "$CARGO_BIN/panda" init && echo "Claude Code hooks registered."
 else
-  echo "Run 'ccr init' to register Claude Code hooks."
+  echo "Run 'panda init' to register Claude Code hooks."
 fi
 
 echo ""
