@@ -6,7 +6,19 @@
 
 <p align="center"><strong>Cut your AI agent's token bill by 60–95% — transparently, locally, automatically.</strong></p>
 
-<p align="center">Built by <a href="https://github.com/AssafWoo">Assaf Petronio</a></p>
+<p align="center">
+  Built by Assaf Petronio — building PandaFilter in public, with the open-source community.
+</p>
+
+<p align="center">
+  <a href="https://x.com/AssafPetronio">@AssafPetronio</a>&nbsp; • &nbsp;<a href="https://github.com/AssafWoo">github.com/AssafWoo</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/AssafWoo/PandaFilter/stargazers">
+    <img src="https://img.shields.io/github/stars/AssafWoo/PandaFilter?style=for-the-badge&logo=github&logoColor=white&label=Star%20the%20panda%20%F0%9F%90%BC%E2%AD%90&labelColor=4b4b4b&color=7c3aed" alt="Star PandaFilter on GitHub">
+  </a>
+</p>
 
 ---
 
