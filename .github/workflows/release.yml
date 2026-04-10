@@ -179,13 +179,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          repository: AssafWoo/homebrew-pandafilter
           token: ${{ secrets.FORMULA_PAT }}
           ref: main
 
       - name: Compute SHA256s and update formula
         run: |
           TAG="${GITHUB_REF_NAME}"
-          BASE="https://github.com/AssafWoo/homebrew-ccr/releases/download/${TAG}"
+          BASE="https://github.com/AssafWoo/PandaFilter/releases/download/${TAG}"
 
           # Download both macOS tarballs (release assets may take a moment to appear)
           for ARCH in arm64 x86_64; do
