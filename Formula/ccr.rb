@@ -2,20 +2,20 @@ class Ccr < Formula
   desc "LLM token optimizer for Claude Code — 60-90% token savings on dev operations"
   homepage "https://github.com/AssafWoo/PandaFilter"
   license "MIT"
-  version "0.6.9"
+  version "0.6.10"
 
   depends_on "jq"
 
   # Prebuilt binaries — no Rust/LLVM build dependencies, installs in seconds.
   # Each tarball contains the ccr binary + libonnxruntime dylib bundled together.
   on_arm do
-    url "https://github.com/AssafWoo/PandaFilter/releases/download/v0.6.9/ccr-macos-arm64.tar.gz"
-    sha256 "01c0d1df90319fee4d735dc1b78e0bb6895882f0e4fdf2804e5f98a8cb63c758"
+    url "https://github.com/AssafWoo/PandaFilter/releases/download/v0.6.10/ccr-macos-arm64.tar.gz"
+    sha256 "555961bd399c402e6eb405a65bc2dfe5a7eb5b07f7a16e707699f9de628db46d"
   end
 
   on_intel do
-    url "https://github.com/AssafWoo/PandaFilter/releases/download/v0.6.9/ccr-macos-x86_64.tar.gz"
-    sha256 "80d98fe2f42fae4a11f66dea6882b253a65f293fe402708608e81aa2a9dc7573"
+    url "https://github.com/AssafWoo/PandaFilter/releases/download/v0.6.10/ccr-macos-x86_64.tar.gz"
+    sha256 "ec23acee4706082f2353cbce7c5d729922e91cf207fce2b42257db0ac86c41d7"
   end
 
   def install
