@@ -29,19 +29,118 @@ fn enable_focus() -> Result<()> {
     let repo_hash = compute_repo_hash(&repo_root)?;
     let index_parent = get_index_parent(&repo_hash)?;
 
-    // Spawn background index if needed
     println!("Registering Context Focusing hook...");
     println!("Building index for: {}", repo_root.display());
 
     // Build the index
     panda_core::focus::run_index(&repo_root, &index_parent)?;
 
-    println!("✓ Context Focusing enabled. Index built and ready.");
+    // Register UserPromptSubmit hook in Claude settings
+    register_focus_hook()?;
+
+    println!("✓ Context Focusing enabled. Index built and hook registered.");
     Ok(())
 }
 
 fn disable_focus() -> Result<()> {
+    // Remove UserPromptSubmit hook from Claude settings
+    unregister_focus_hook()?;
     println!("Context Focusing disabled. Index preserved — re-enable with `panda focus --enable`.");
+    Ok(())
+}
+
+/// Register the UserPromptSubmit hook in ~/.claude/settings.json
+fn register_focus_hook() -> Result<()> {
+    let home = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
+    let settings_path = home.join(".claude").join("settings.json");
+
+    // Resolve panda binary path
+    let panda_bin = std::env::current_exe()
+        .unwrap_or_else(|_| std::path::PathBuf::from("panda"));
+    let panda_bin_str = panda_bin.to_string_lossy();
+
+    let focus_cmd = format!(
+        "PANDA_SESSION_ID=$PPID {} focus",
+        panda_bin_str
+    );
+
+    // Load or create settings.json
+    let mut settings: serde_json::Value = if settings_path.exists() {
+        let content = std::fs::read_to_string(&settings_path)?;
+        serde_json::from_str(&content)?
+    } else {
+        serde_json::json!({})
+    };
+
+    // Ensure hooks.UserPromptSubmit exists as an array
+    if settings.get("hooks").is_none() {
+        settings["hooks"] = serde_json::json!({});
+    }
+    if settings["hooks"].get("UserPromptSubmit").is_none() {
+        settings["hooks"]["UserPromptSubmit"] = serde_json::json!([]);
+    }
+
+    let arr = settings["hooks"]["UserPromptSubmit"]
+        .as_array_mut()
+        .ok_or_else(|| anyhow::anyhow!("UserPromptSubmit is not an array"))?;
+
+    // Check if already registered
+    let already = arr.iter().any(|entry| {
+        entry["hooks"]
+            .as_array()
+            .map(|hooks| {
+                hooks.iter().any(|h| {
+                    h.get("command")
+                        .and_then(|c| c.as_str())
+                        .map(|c| c.contains("panda") && c.contains("focus"))
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+    });
+
+    if !already {
+        arr.push(serde_json::json!({
+            "matcher": "",
+            "hooks": [{ "type": "command", "command": focus_cmd }]
+        }));
+    }
+
+    std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+    Ok(())
+}
+
+/// Remove the UserPromptSubmit focus hook from ~/.claude/settings.json
+fn unregister_focus_hook() -> Result<()> {
+    let home = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
+    let settings_path = home.join(".claude").join("settings.json");
+
+    if !settings_path.exists() {
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(&settings_path)?;
+    let mut settings: serde_json::Value = serde_json::from_str(&content)?;
+
+    if let Some(arr) = settings["hooks"]["UserPromptSubmit"].as_array_mut() {
+        arr.retain(|entry| {
+            !entry["hooks"]
+                .as_array()
+                .map(|hooks| {
+                    hooks.iter().any(|h| {
+                        h.get("command")
+                            .and_then(|c| c.as_str())
+                            .map(|c| c.contains("panda") && c.contains("focus"))
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        });
+    }
+
+    std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
     Ok(())
 }
 
