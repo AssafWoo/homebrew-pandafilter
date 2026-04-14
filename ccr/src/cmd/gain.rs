@@ -813,10 +813,106 @@ fn print_insight(records: &[Analytics], days: u32) {
         }
     }
 
+    // Context Focusing insight
+    print_focus_insight(cutoff);
+
     println!();
     println!(
         "  Total saved: {}",
         fmt_tokens(total_saved).if_supports_color(Stdout, |t| t.green())
+    );
+}
+
+// ─── Context Focusing insight ─────────────────────────────────────────────────
+
+fn print_focus_insight(cutoff: u64) {
+    let conn = match crate::analytics_db::open() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    // Count guidance events in the window
+    let guidance_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM guidance_records WHERE timestamp_secs >= ?1",
+            rusqlite::params![cutoff as i64],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    if guidance_count == 0 {
+        return;
+    }
+
+    // Aggregate guidance stats
+    let (total_recommended, total_in_repo, total_excluded_est, total_guidance_tokens): (i64, i64, i64, i64) = conn
+        .query_row(
+            "SELECT COALESCE(SUM(files_recommended), 0), \
+                    COALESCE(SUM(files_in_repo), 0), \
+                    COALESCE(SUM(excluded_tokens_est), 0), \
+                    COALESCE(SUM(guidance_tokens), 0) \
+             FROM guidance_records WHERE timestamp_secs >= ?1",
+            rusqlite::params![cutoff as i64],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap_or((0, 0, 0, 0));
+
+    // Count unique sessions with guidance
+    let session_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT session_id) FROM guidance_records WHERE timestamp_secs >= ?1",
+            rusqlite::params![cutoff as i64],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    // Count reads that matched recommended files (precision)
+    let reads_total: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM session_reads WHERE timestamp_secs >= ?1",
+            rusqlite::params![cutoff as i64],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    // Compute average focus ratio
+    let avg_focus_ratio = if total_in_repo > 0 {
+        let excluded = total_in_repo - total_recommended;
+        excluded as f64 / total_in_repo as f64 * 100.0
+    } else {
+        0.0
+    };
+
+    let avg_recommended = if guidance_count > 0 {
+        total_recommended as f64 / guidance_count as f64
+    } else {
+        0.0
+    };
+
+    println!();
+    println!(
+        "  {:<22} {:>3} sessions   ~{} tokens estimated saved",
+        "Context Focusing",
+        session_count,
+        fmt_tokens(total_excluded_est as usize)
+    );
+    println!(
+        "    Avg focus ratio    {:.1}% of codebase excluded per prompt",
+        avg_focus_ratio
+    );
+    println!(
+        "    Avg recommended    {:.1} files per prompt",
+        avg_recommended
+    );
+    if reads_total > 0 {
+        println!(
+            "    File reads tracked {} across {} sessions",
+            reads_total, session_count
+        );
+    }
+    println!(
+        "    Guidance overhead  {} tokens total",
+        fmt_tokens(total_guidance_tokens as usize)
     );
 }
 
