@@ -4,15 +4,7 @@
 
 <h1 align="center">PandaFilter</h1>
 
-<p align="center"><strong>Cut your AI agent's token bill by 60–95% — by compressing what it reads AND telling it what to read.</strong></p>
-
-<p align="center">
-  Built by Assaf Petronio — building PandaFilter in public, with the open-source community.
-</p>
-
-<p align="center">
-  <a href="https://x.com/AssafPetronio">@AssafPetronio</a>&nbsp; • &nbsp;<a href="https://github.com/AssafWoo">github.com/AssafWoo</a>
-</p>
+<p align="center"><strong>Cut your AI agent's token bill by 60–95% — by removing the noise from what it reads.</strong></p>
 
 <p align="center">
   <a href="https://github.com/AssafWoo/PandaFilter/stargazers">
@@ -30,7 +22,7 @@
 
 ---
 
-## Quick start
+## Install
 
 ```bash
 brew tap AssafWoo/pandafilter
@@ -45,28 +37,29 @@ curl -fsSL https://raw.githubusercontent.com/AssafWoo/homebrew-pandafilter/main/
 
 > **First run:** PandaFilter downloads the BERT model (~90 MB, `all-MiniLM-L6-v2`) from HuggingFace and caches it at `~/.cache/huggingface/`. Subsequent runs are instant.
 
+Then wire it into your agent:
+
+```bash
+panda init                              # Claude Code (default)
+panda init --agent cursor               # Cursor
+panda init --agent gemini               # Gemini CLI
+panda init --agent cline                # Cline
+panda init --agent copilot              # VS Code Copilot
+```
+
 ---
 
-## Why PandaFilter?
+## How it works
 
-AI coding agents are expensive to run — not because of what you ask them, but because of what they read back. Every `cargo build`, `git log`, or `npm install` dumps thousands of tokens of noise into the context window. I built PandaFilter to fix that in two ways. First, it sits between your agent and your shell, compresses the output, and hands back only what the model needs. But compression is only half the story — PandaFilter also builds a local file-relationship graph from your git history, so on every prompt it tells the agent which files matter and which to skip. Fewer wasted reads, fewer wasted tokens. No config changes, no workflow changes — just less waste.
+When your AI agent runs a command — `pip install`, `cargo build`, `npm install` — PandaFilter intercepts the output and removes everything the model doesn't need: download progress, module graphs, passing test lines, spinners. The agent sees a clean summary with errors, warnings, and results. Nothing useful is dropped.
 
----
-
-## What it does
-
-- Hooks into Claude Code, Cursor, Gemini CLI, Cline, and VS Code Copilot automatically after `panda init`.
-- Filters build logs, test noise, and progress bars before the model ever sees them.
-- Uses BERT embeddings to match unknown commands to the closest handler — nothing falls through silently.
-- Caches repeated commands (git, kubectl, docker, terraform) so the model isn't re-reading stale output.
-- **Context Focusing (opt-in):** Builds a local file-relationship graph from git history and semantic embeddings. On every prompt, tells the agent which files to focus on and which to skip — preventing wasted reads before they happen. Enable with `panda focus --enable`.
-- Runs 100% locally — no data leaves your machine.
+No config changes. No workflow changes. Runs 100% locally.
 
 ---
 
 ## Token savings
 
-Numbers from `ccr/tests/handler_benchmarks.rs`. Run `cargo test -p panda benchmark -- --nocapture` to reproduce, or `panda gain` to see your own live data.
+Numbers from `ccr/tests/handler_benchmarks.rs`. Run `panda gain` to see your own live data.
 
 | Operation | Without PandaFilter | With PandaFilter | Savings |
 |-----------|------------:|---------:|:-------:|
@@ -121,43 +114,7 @@ Numbers from `ccr/tests/handler_benchmarks.rs`. Run `cargo test -p panda benchma
 
 ---
 
-## Compared to doing nothing
-
-| Scenario | Without PandaFilter | With PandaFilter |
-|---|---|---|
-| `cargo build` (errors) | 1,923 tokens | 93 tokens |
-| `pytest` (all passing) | 3,818 tokens | 162 tokens |
-| `npm install` | 648 tokens | 25 tokens |
-| **Typical session** | **71k tokens** | **15k tokens** |
-
----
-
-## Context Focusing savings (file recommendations)
-
-On top of output compression, PandaFilter tells the agent which files to focus on per prompt — preventing unnecessary reads before they happen.
-
-| Repo size | Unnecessary reads prevented | Estimated savings |
-|-----------|---------------------------|-------------------|
-| Small (< 25 files) | Skipped (auto-disabled) | — |
-| Medium (25–100 files) | 3–5 reads | 4,500–25,000 tokens |
-| Large (100+ files) | 5–10+ reads | 7,500–50,000 tokens |
-
-These savings stack on top of output compression — the agent reads fewer files, and the files it does read are compressed.
-
----
-
 ## Commands
-
-**`panda init`** — wire PandaFilter into your agent's hooks:
-
-```bash
-panda init                              # Claude Code (default)
-panda init --agent cursor               # Cursor
-panda init --agent gemini               # Gemini CLI
-panda init --agent cline                # Cline (.clinerules in project dir)
-panda init --agent copilot              # VS Code Copilot
-panda init --uninstall                  # remove (add --agent <x> for specific agent)
-```
 
 **`panda gain`** — see your token savings:
 
@@ -168,18 +125,25 @@ panda gain --history          # last 14 days
 panda gain --insight          # categorized savings + top saves
 ```
 
-**`panda doctor`** — diagnose the full installation in one command (run this first when something seems off).
+**`panda doctor`** — diagnose the full installation in one command.
 
-**`panda focus`** — manage Context Focusing (disabled by default — enable after testing):
+**`panda init --uninstall`** — remove hooks:
 
 ```bash
-panda focus --status             # show: enabled/disabled, index age, repo size
-panda focus --enable             # enable Context Focusing for this repo
-panda focus --disable            # disable (keeps index data)
-panda focus --dry-run            # preview what guidance would be injected
+panda init --uninstall                  # Claude Code
+panda init --agent cursor --uninstall   # Cursor
 ```
 
-**`panda index`** — manually rebuild the file-relationship graph:
+**`panda focus`** — opt-in: tells the agent which files matter for the current prompt, preventing unnecessary reads:
+
+```bash
+panda focus --enable             # enable for this repo
+panda focus --disable            # disable (keeps index data)
+panda focus --status             # show status + index age
+panda focus --dry-run            # preview guidance without enabling
+```
+
+**`panda index`** — manually rebuild the file-relationship index:
 
 ```bash
 panda index                      # full/incremental build for current repo
@@ -188,15 +152,14 @@ panda index                      # full/incremental build for current repo
 **Other commands:**
 
 ```bash
-panda verify                            # check hook integrity for all installed agents
-panda discover                          # scan Claude history for commands that ran without PandaFilter
+panda verify                            # check hook integrity
+panda discover                          # scan history for unfiltered commands
+panda run git status                    # run a command through PandaFilter manually
+panda proxy git status                  # run raw (no filtering), record baseline
+panda read-file src/main.rs --level auto  # preview read filtering
+panda expand ZI_3                       # restore a collapsed block
 panda noise                             # show learned noise patterns; --reset to clear
-panda expand ZI_3                       # print original lines from a collapsed block
-panda read-file src/main.rs --level auto  # apply read-level filter and print savings
 panda compress --scan-session           # compress current conversation context
-panda filter --command cargo            # filter stdin as if it were cargo output
-panda run git status                    # run through PandaFilter handler manually
-panda proxy git status                  # run raw (no filtering), record analytics baseline
 ```
 
 ---
@@ -388,7 +351,7 @@ State tracked via `PANDA_SESSION_ID=$PPID`, stored at `~/.local/share/panda/sess
 | Cline | `.clinerules` (project dir) | — (rules-based) |
 | VS Code Copilot | `.github/hooks/panda-rewrite.json` | `.github/hooks/panda-rewrite.sh` |
 
-All agents share the same binary and compression pipeline.
+All agents share the same binary and filtering pipeline.
 
 **PreToolUse:** known handler → rewrites to `panda run <cmd>`; unknown → no-op; already wrapped → no double-wrap; compound commands → each segment rewritten independently.
 
@@ -436,20 +399,23 @@ rm -rf ~/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2
 
 ## FAQ
 
-**Does PandaFilter degrade Claude's output quality?**
-No. PandaFilter only removes noise — build logs, module graphs, passing test lines, progress bars. Errors, file paths, and summaries are always kept.
+**Does PandaFilter change what the agent can see?**
+It removes noise — build progress, passing test lines, module download logs. Errors, file paths, and results are always kept.
 
-**What about tools PandaFilter doesn't know?**
-BERT semantic routing matches against all known handlers. If confidence is high enough the closest handler applies; otherwise output passes through unchanged. PandaFilter never silently drops output.
+**What if I don't want a specific command filtered?**
+Add a rule to `.panda/filters.toml` to customize or override any handler. See the User-defined filters section. You can also use `panda proxy <cmd>` to run a command raw with no filtering.
+
+**What about commands PandaFilter doesn't know?**
+Output passes through unchanged. PandaFilter never silently drops output from unknown commands.
 
 **How do I verify it's working?**
-`panda gain` after a session. To inspect what the model received from a specific command: `panda proxy git log --oneline -20`.
-
-**What is Context Focusing?**
-On every prompt, PandaFilter queries a local graph of your repo's files and git co-change history to tell the agent which files are relevant and which to avoid. This prevents the agent from wasting tokens reading unrelated files. Test it with `panda focus --enable` after verifying the index on your repo. Disable it with `panda focus --disable` if needed.
+Run `panda gain` after a session. To see exactly what the agent received from a specific command: `panda run git log --oneline -20`.
 
 **Does PandaFilter send any data outside my machine?**
-Never. All processing is fully local. BERT runs on-device.
+No. All processing is fully local. BERT runs on-device.
+
+**What is Context Focusing?**
+An opt-in feature that tells the agent which files are relevant for the current prompt, preventing it from reading unrelated files. Enable with `panda focus --enable` after running `panda doctor` to confirm the index is ready.
 
 ---
 
@@ -462,3 +428,13 @@ Open an issue or PR on [GitHub](https://github.com/AssafWoo/PandaFilter). To add
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+## Why PandaFilter? Why Panda?
+
+AI coding sessions are expensive — not because of what you ask, but because of what the agent reads back. Every `cargo build` or `npm install` dumps thousands of tokens of noise into the context window. I built PandaFilter to strip that out automatically.
+
+The name comes from how a panda eats: it consumes enormous amounts of raw material and extracts only what it needs.
+
+— [Assaf Petronio](https://x.com/AssafPetronio) · [github.com/AssafWoo](https://github.com/AssafWoo)
