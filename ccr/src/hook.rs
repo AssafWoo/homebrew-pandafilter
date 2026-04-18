@@ -1728,7 +1728,8 @@ fn score_web_section(section: &str) -> u32 {
 }
 
 /// Collapse a section to its header + first 3 non-empty content lines.
-/// Used when BERT budget is exhausted.
+/// When lines are omitted a zoom block is registered so Claude can expand
+/// the full section with `panda expand ZI_N`. Used when BERT budget is exhausted.
 fn collapse_section_simple(section: &str) -> String {
     let lines: Vec<&str> = section.lines().collect();
     let header = lines.first().copied().unwrap_or("").to_string();
@@ -1745,11 +1746,21 @@ fn collapse_section_simple(section: &str) -> String {
     let n_remaining = lines.iter().skip(1).filter(|l| !l.trim().is_empty()).count();
     let omitted = n_remaining.saturating_sub(body.len());
     if omitted > 0 {
+        // Register omitted lines as a zoom block so the content is recoverable.
+        let omitted_lines: Vec<String> = lines
+            .iter()
+            .skip(1)
+            .filter(|l| !l.trim().is_empty())
+            .skip(3)
+            .map(|l| l.to_string())
+            .collect();
+        let zi_id = panda_core::zoom::register(omitted_lines);
         format!(
-            "{}\n{}\n[... {} lines collapsed]",
+            "{}\n{}\n[... {} lines — panda expand {}]",
             header,
             body.join("\n"),
-            omitted
+            omitted,
+            zi_id
         )
     } else {
         format!("{}\n{}", header, body.join("\n"))

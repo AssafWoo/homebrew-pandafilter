@@ -93,20 +93,24 @@ fn webfetch_long_page_produces_compressed_output() {
     assert!(out.status.success());
 
     // If the hook produced output it must be valid JSON.
-    // Byte length may be >= original because compression markers ("[... N lines collapsed]")
-    // add bytes even while reducing information density. Verify the hook ran and
-    // the output is either shorter OR contains a compression marker.
+    // Byte length may be >= original because collapse markers add bytes while reducing
+    // information density. Verify the hook ran and the output is either shorter OR
+    // contains an expandable collapse marker ("panda expand ZI_N").
     if !out.stdout.is_empty() {
         let output = parse_hook_output(&out.stdout)
             .expect("stdout must be valid {\"output\":\"...\"} JSON");
         let compressed = output.len() < original_len;
-        let has_marker = output.contains("[...") || output.contains("collapsed");
+        // Collapsed/summarized sections produce zoom markers (e.g. "expand ZI_N") so
+        // Claude can always recover the full content. Check for the ZI_ pattern which
+        // is common to all zoom expand formats ("panda expand ZI_N", "ccr expand ZI_N").
+        let has_zoom_marker = output.contains("ZI_") || output.contains("expand ZI");
         assert!(
-            compressed || has_marker,
-            "WebFetch must either shorten content or add collapse markers, \
-             got {} chars from {} chars original",
+            compressed || has_zoom_marker,
+            "WebFetch must either shorten content or add zoom markers (expand ZI_N), \
+             got {} chars from {} chars original.\nOutput:\n{}",
             output.len(),
-            original_len
+            original_len,
+            &output[..output.len().min(400)]
         );
     }
 }
