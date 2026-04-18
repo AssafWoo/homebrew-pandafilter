@@ -1607,6 +1607,12 @@ fn process_webfetch(hook_input: HookInput) -> Result<Option<String>> {
         })?));
     }
 
+    // Data formats (JSON, XML, HTML, code) must never be compressed — structure
+    // is semantically load-bearing and BERT summarization would mangle it.
+    if is_passthrough_web_content(&output_text) {
+        return Ok(None);
+    }
+
     // Split into sections and score by keyword density (no BERT cost)
     let sections = split_web_sections(&output_text);
     if sections.is_empty() {
@@ -1671,9 +1677,104 @@ fn process_webfetch(hook_input: HookInput) -> Result<Option<String>> {
     Ok(Some(serde_json::to_string(&HookOutput { output: final_output })?))
 }
 
-/// Split a web page into logical sections on Markdown headers (`##`/`###`) or
-/// on two or more consecutive blank lines. Returns non-empty sections only.
+/// Returns true for content that must not be compressed — BERT summarization
+/// would destroy the semantic structure of data formats and code.
+fn is_passthrough_web_content(text: &str) -> bool {
+    // Inspect the first non-empty line for leading format indicators.
+    let first = text
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .map(|l| l.trim())
+        .unwrap_or("");
+
+    // JSON / YAML front-matter / XML / HTML / shell
+    if first.starts_with('{')
+        || first.starts_with('[')
+        || first.starts_with("<?")
+        || first.starts_with("<!DOCTYPE")
+        || first.starts_with("<!--")
+        || first.starts_with("#!/")
+    {
+        return true;
+    }
+
+    // Heavily tagged HTML that wasn't stripped (> 20% of lines start with `<`)
+    let total = text.lines().count();
+    if total > 10 {
+        let tag_lines = text
+            .lines()
+            .filter(|l| {
+                let t = l.trim();
+                t.starts_with('<') && (t.ends_with('>') || t.contains("</"))
+            })
+            .count();
+        if tag_lines * 100 / total > 20 {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Split a web page into logical sections using a cascading strategy so the
+/// function works on all real-world content formats, not just Markdown docs.
+///
+/// Strategy (applied in order, stops at the first that yields ≥ 3 sections):
+///   1. Any Markdown/AsciiDoc heading (`#`/`##`/`###`) or 2+ blank lines
+///      → best for structured documentation pages
+///   2. Single blank lines → best for prose/blog pages
+///   3. Fixed 40-line chunks → last-resort for dense continuous text
+///
+/// Sections larger than MAX_SECTION_LINES are split into 40-line sub-sections
+/// so no single BERT call has to process a wall of text.
 fn split_web_sections(text: &str) -> Vec<String> {
+    const MAX_SECTION_LINES: usize = 60;
+    const CHUNK_SIZE: usize = 40;
+
+    // ── Strategy 1: headers + double blank lines ─────────────────────────────
+    let s1 = split_on_headers_or_double_blanks(text);
+    let sections = if s1.len() >= 3 {
+        s1
+    } else {
+        // ── Strategy 2: single blank lines (paragraph boundaries) ────────────
+        let s2 = split_on_single_blanks(text);
+        if s2.len() >= 3 {
+            s2
+        } else {
+            // ── Strategy 3: fixed chunks ──────────────────────────────────────
+            text.lines()
+                .collect::<Vec<_>>()
+                .chunks(CHUNK_SIZE)
+                .map(|chunk| chunk.join("\n"))
+                .filter(|s| !s.trim().is_empty())
+                .collect()
+        }
+    };
+
+    // Sub-divide any section that is still too large so each BERT call stays cheap.
+    sections
+        .into_iter()
+        .flat_map(|section| {
+            let line_count = section.lines().count();
+            if line_count > MAX_SECTION_LINES {
+                section
+                    .lines()
+                    .collect::<Vec<_>>()
+                    .chunks(CHUNK_SIZE)
+                    .map(|chunk| chunk.join("\n"))
+                    .filter(|s| !s.trim().is_empty())
+                    .collect::<Vec<_>>()
+            } else {
+                vec![section]
+            }
+        })
+        .filter(|s| !s.trim().is_empty())
+        .collect()
+}
+
+/// Split on Markdown/AsciiDoc headings (`#`, `##`, `###`) or two or more
+/// consecutive blank lines. Used as the primary split strategy.
+fn split_on_headers_or_double_blanks(text: &str) -> Vec<String> {
     let mut sections: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut blank_run = 0usize;
@@ -1688,14 +1789,36 @@ fn split_web_sections(text: &str) -> Vec<String> {
             } else {
                 current.push('\n');
             }
-        } else if (trimmed.starts_with("## ") || trimmed.starts_with("### "))
-            && !current.trim().is_empty()
-        {
+        } else if trimmed.starts_with('#') && !current.trim().is_empty() {
+            // Any Markdown heading level (#, ##, ###, ####)
             sections.push(current.trim().to_string());
             current = format!("{}\n", line);
             blank_run = 0;
         } else {
             blank_run = 0;
+            current.push_str(line);
+            current.push('\n');
+        }
+    }
+    if !current.trim().is_empty() {
+        sections.push(current.trim().to_string());
+    }
+    sections.into_iter().filter(|s| !s.trim().is_empty()).collect()
+}
+
+/// Split on single blank lines — used for prose/blog content where paragraphs
+/// are separated by a single blank line rather than headings.
+fn split_on_single_blanks(text: &str) -> Vec<String> {
+    let mut sections: Vec<String> = Vec::new();
+    let mut current = String::new();
+
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            if !current.trim().is_empty() {
+                sections.push(current.trim().to_string());
+                current = String::new();
+            }
+        } else {
             current.push_str(line);
             current.push('\n');
         }

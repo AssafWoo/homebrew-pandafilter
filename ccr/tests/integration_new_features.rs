@@ -157,6 +157,131 @@ fn webfetch_code_block_content_is_preserved() {
     }
 }
 
+// ── WebFetch — JSON/data passes through untouched ────────────────────────────
+
+#[test]
+fn webfetch_json_content_passes_through_unchanged() {
+    // JSON responses must never be BERT-compressed — structure is semantic.
+    let json_body = serde_json::json!({
+        "results": (0..50).map(|i| serde_json::json!({
+            "id": i,
+            "name": format!("item_{}", i),
+            "value": i * 10,
+            "tags": ["rust", "api", "important"]
+        })).collect::<Vec<_>>()
+    })
+    .to_string();
+    // Reformat as multi-line so it's > 30 lines
+    let multiline = json_body
+        .replace(',', ",\n")
+        .replace('{', "{\n")
+        .replace('}', "\n}");
+    assert!(multiline.lines().count() > 30, "fixture must exceed 30 lines");
+
+    let json = hook_json(
+        "WebFetch",
+        serde_json::json!({ "url": "https://api.example.com/data.json" }),
+        &multiline,
+    );
+
+    let out = Command::cargo_bin("panda")
+        .unwrap()
+        .args(["hook"])
+        .env("PANDA_SESSION_ID", test_sid("wf_json"))
+        .write_stdin(json)
+        .output()
+        .unwrap();
+
+    assert!(out.status.success());
+    // JSON content must pass through — stdout must be empty (no compression).
+    assert!(
+        out.stdout.is_empty(),
+        "JSON content must never be compressed, got: {}",
+        String::from_utf8_lossy(&out.stdout).chars().take(200).collect::<String>()
+    );
+}
+
+// ── WebFetch — HTML content passes through untouched ─────────────────────────
+
+#[test]
+fn webfetch_html_content_passes_through_unchanged() {
+    // HTML pages that weren't stripped must pass through — BERT would prefer
+    // tag lines over content lines, inverting the selection.
+    let html = concat!(
+        "<!DOCTYPE html>\n",
+        "<html lang=\"en\">\n",
+        "<head><title>Test Page</title></head>\n",
+        "<body>\n",
+        "<h1>Important Content</h1>\n",
+        "<p>This is critical information that Claude needs intact.</p>\n",
+        "<div class=\"section\">\n",
+        "  <h2>API Reference</h2>\n",
+        "  <p>The function signature is: <code>fn process(input: &str) -> Result&lt;String&gt;</code></p>\n",
+        "  <p>Parameters: input — the raw text to process</p>\n",
+        "  <p>Returns: Ok(compressed) on success, Err on parse failure</p>\n",
+        "</div>\n",
+    );
+    // Repeat to get past the 30-line threshold
+    let repeated = html.repeat(4);
+    assert!(repeated.lines().count() > 30);
+
+    let json = hook_json(
+        "WebFetch",
+        serde_json::json!({ "url": "https://example.com/page.html" }),
+        &repeated,
+    );
+
+    let out = Command::cargo_bin("panda")
+        .unwrap()
+        .args(["hook"])
+        .env("PANDA_SESSION_ID", test_sid("wf_html"))
+        .write_stdin(json)
+        .output()
+        .unwrap();
+
+    assert!(out.status.success());
+    assert!(
+        out.stdout.is_empty(),
+        "HTML content must pass through unchanged"
+    );
+}
+
+// ── WebFetch — prose blog page (no headers, single blank lines) ───────────────
+
+#[test]
+fn webfetch_prose_page_compresses_without_losing_structure() {
+    // A typical blog post: no ## headers, single blank lines between paragraphs.
+    // Must not be treated as one big section and crushed to 20 lines.
+    let prose = build_prose_page();
+    assert!(prose.lines().count() > 30);
+
+    let json = hook_json(
+        "WebFetch",
+        serde_json::json!({ "url": "https://blog.example.com/rust-guide" }),
+        &prose,
+    );
+
+    let out = Command::cargo_bin("panda")
+        .unwrap()
+        .args(["hook"])
+        .env("PANDA_SESSION_ID", test_sid("wf_prose"))
+        .write_stdin(json)
+        .output()
+        .unwrap();
+
+    assert!(out.status.success());
+
+    // If compression fires, every omitted chunk must be recoverable (has ZI_ zoom marker).
+    if let Some(output) = parse_hook_output(&out.stdout) {
+        // Any omission marker must include a zoom ID — no dead ends.
+        let collapsed_without_id = output.contains("[... ") && !output.contains("ZI_");
+        assert!(
+            !collapsed_without_id,
+            "every collapsed section must have a zoom ID for recovery"
+        );
+    }
+}
+
 // ── WebFetch — empty output passes through ───────────────────────────────────
 
 #[test]
@@ -576,4 +701,24 @@ fn build_cargo_errors_set_b() -> String {
         "   |                    ---- immutable borrow later used here\n",
     )
     .to_string()
+}
+
+/// A realistic blog-style prose page: no Markdown headers, single blank lines
+/// between paragraphs. Representative of many real web pages that are NOT
+/// structured documentation.
+fn build_prose_page() -> String {
+    // Each paragraph is separated by a single blank line.
+    // No ## headers — this tests the single-blank-line fallback split strategy.
+    let paragraphs = [
+        "Understanding Rust's Ownership Model",
+        "Rust's ownership system is one of its most distinctive features.\nUnlike garbage-collected languages, Rust tracks memory ownership at compile time\nthrough a set of rules enforced by the borrow checker.\nEvery value has a single owner, and when the owner goes out of scope the value is dropped.",
+        "This eliminates an entire class of bugs that plague systems programming.\nUse-after-free, double-free, and dangling pointer errors are impossible\nin safe Rust code. The compiler rejects programs that would cause\nundefined behaviour before they ever run.",
+        "Borrowing allows temporary access to a value without taking ownership.\nYou can have either one mutable reference or any number of immutable\nreferences at any given time. This rule prevents data races at compile time,\nwhich is a significant guarantee for concurrent code.",
+        "Lifetimes annotate how long references are valid.\nMost of the time the compiler infers lifetimes automatically through lifetime elision.\nExplicit lifetime annotations are only needed when the compiler cannot\ndetermine the relationship between the lifetimes of multiple references.",
+        "The Clone and Copy traits control how values are duplicated.\nTypes that implement Copy are duplicated bit-for-bit on assignment.\nTypes that implement Clone provide an explicit clone() method.\nMost heap-allocated types like String and Vec implement Clone but not Copy.",
+        "Interior mutability patterns such as RefCell, Mutex, and RwLock allow\nmutation through shared references. RefCell enforces borrow rules at runtime.\nMutex provides mutual exclusion for shared state across threads.\nThese are escape hatches for cases where the static borrow checker is too conservative.",
+        "Smart pointers like Box, Rc, and Arc extend the ownership model.\nBox allocates a value on the heap and transfers ownership.\nRc enables shared ownership within a single thread via reference counting.\nArc is the thread-safe equivalent, using atomic reference counting.",
+        "Understanding these primitives is essential for writing idiomatic Rust.\nThe ownership model might feel restrictive at first, but it encodes\nimportant invariants about your program's data flow that make\nrefactoring safer and more predictable in the long run.",
+    ];
+    paragraphs.join("\n\n")
 }
