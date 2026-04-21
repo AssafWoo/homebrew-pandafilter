@@ -411,7 +411,7 @@ function OverviewDiagram() {
         <circle cx="390" cy="104" r="72" fill="rgba(34,211,238,0.04)" stroke="rgba(34,211,238,0.13)" strokeWidth="1" filter="url(#ov-glow)"/>
         <circle cx="390" cy="104" r="58" fill={sb} stroke={c} strokeWidth="1.5"/>
         {/* logo 56×56, centered */}
-        <image href="/logo.png" x="362" y="76" width="56" height="56"/>
+        <image href={`${import.meta.env.BASE_URL}logo.png`} x="362" y="76" width="56" height="56"/>
 
         {/* ── ARROW logo → right ─────────────────── */}
         <path d="M 449 104 L 579 104" stroke={c} strokeWidth="2" fill="none" markerEnd="url(#ov-c)"/>
@@ -1499,7 +1499,7 @@ function SecurityDiagram() {
           fill={sidebar}
           stroke={cyan} strokeWidth="1.5" />
         {/* logo image */}
-        <image href="/logo.png" x="374" y="97" width="32" height="32" />
+        <image href={`${import.meta.env.BASE_URL}logo.png`} x="374" y="97" width="32" height="32" />
         {/* "on-device" label inside circle */}
         <text x="390" y="148" textAnchor="middle"
           fill={muted} fontSize="9" fontFamily="Inter,sans-serif" letterSpacing="0.04em">on-device</text>
@@ -1779,7 +1779,7 @@ export default function App() {
         padding: '0 28px', background: T.sidebar, borderBottom: `1px solid ${T.border}`,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <img src="/logo.png" alt="PandaFilter" style={{ width: 32, height: 32, objectFit: 'contain' }} />
+          <img src={`${import.meta.env.BASE_URL}logo.png`} alt="PandaFilter" style={{ width: 32, height: 32, objectFit: 'contain' }} />
           <span style={{ fontWeight: 700, fontSize: 15, color: T.text }}>PandaFilter</span>
           <span style={{
             fontSize: 11, padding: '2px 8px', borderRadius: 999,
