@@ -25,7 +25,7 @@ pub struct FileEntry {
 /// 2. Which files to explicitly avoid (negative guidance)
 pub fn assemble(
     recommended: Vec<RankedFile>,
-    total_files: usize,
+    _total_files: usize,
 ) -> GuidanceOutput {
     // Convert to display format
     let recommended_files: Vec<FileEntry> = recommended

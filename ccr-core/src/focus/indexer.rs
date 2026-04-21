@@ -34,7 +34,7 @@ const SKIP_DIRS: &[&str] = &[
     // like org.springframework.samples.* and monorepo sub-package examples/ would
     // be incorrectly excluded. is_noise_path() handles these at query time instead.
     "testdata", "test-data", "fixtures", "fixture",
-    "examples", "docs", "doc", "documentation", "docs_src",
+    "docs", "doc", "documentation", "docs_src",
     "e2e", "benchmarks", "website", "paradox", "i18n",
 ];
 
