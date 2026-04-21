@@ -114,6 +114,9 @@ enum Commands {
         /// Full command string to rewrite
         command: String,
     },
+    /// MCP server — expose panda's file index as tools (hidden)
+    #[command(hide = true)]
+    Mcp,
     /// Execute a command raw (no filtering) and record analytics
     Proxy {
         /// The command and its arguments
@@ -219,6 +222,7 @@ fn main() {
         },
         Commands::Run { args } => cmd::run::run(args),
         Commands::Rewrite { command } => cmd::rewrite::run(command),
+        Commands::Mcp => cmd::mcp::run(),
         Commands::Proxy { args } => cmd::proxy::run(args),
         Commands::Discover => cmd::discover::run(),
         Commands::Expand { id, list } => cmd::expand::run(id.as_deref().unwrap_or(""), list),
@@ -358,6 +362,10 @@ jq -n --argjson updated "$UPDATED_INPUT" \
 
     println!();
     println!("Run 'panda doctor' to verify your installation.");
+    println!();
+    println!("Tip: On large repos (25+ files, 2000+ lines), focus ranking");
+    println!("     gives the agent confidence-ranked file hints.");
+    println!("     Run 'panda focus --enable' to activate it.");
 
     Ok(())
 }
@@ -595,6 +603,10 @@ jq -n --argjson updated "$UPDATED" '{{"permission":"allow","updated_input":$upda
 
     println!();
     println!("Run 'panda doctor' to verify your installation.");
+    println!();
+    println!("Tip: On large repos (25+ files, 2000+ lines), focus ranking");
+    println!("     gives the agent confidence-ranked file hints.");
+    println!("     Run 'panda focus --enable' to activate it.");
 
     Ok(())
 }

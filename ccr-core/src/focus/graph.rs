@@ -7,7 +7,7 @@ use anyhow::{bail, Result};
 use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 
-pub const SCHEMA_VERSION: &str = "5";
+pub const SCHEMA_VERSION: &str = "8";
 
 /// Open (or create) the database at `path` in read-write mode and apply the schema.
 /// Returns an error if the existing schema version does not match SCHEMA_VERSION.

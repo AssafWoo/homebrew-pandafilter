@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "panda": {
+      "type": "stdio",
+      "command": "/opt/homebrew/bin/panda",
+      "args": ["mcp"]
+    }
+  }
+}

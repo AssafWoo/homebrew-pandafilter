@@ -2,6 +2,7 @@ use anyhow::Result;
 use panda_core::analytics::Analytics;
 use owo_colors::{OwoColorize, Stream::Stdout, Style};
 use std::collections::BTreeMap;
+use serde_json;
 
 /// Pricing table for known Anthropic model families (input tokens, $/1M).
 /// More-specific prefixes must appear before less-specific ones because
@@ -392,6 +393,49 @@ fn print_summary(records: &[Analytics], breakdown: bool) {
             }
         }
     }
+
+    // ── Focus tip (shown only when focus hook is not yet registered) ──
+    if !is_focus_registered() {
+        println!();
+        println!("{}", "Focus Ranking available".if_supports_color(Stdout, |t| t.bold()));
+        println!("{}", "  Give the agent confidence-ranked file hints for large repos.".if_supports_color(Stdout, |t| t.dimmed()));
+        println!("{}", "  Run `panda focus --enable` to activate.".if_supports_color(Stdout, |t| t.dimmed()));
+    }
+}
+
+/// Returns true if the panda focus UserPromptSubmit hook is registered.
+fn is_focus_registered() -> bool {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return false,
+    };
+    let settings_path = home.join(".claude").join("settings.json");
+    let content = match std::fs::read_to_string(&settings_path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let settings: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    settings["hooks"]["UserPromptSubmit"]
+        .as_array()
+        .map(|arr| {
+            arr.iter().any(|entry| {
+                entry["hooks"]
+                    .as_array()
+                    .map(|hooks| {
+                        hooks.iter().any(|h| {
+                            h.get("command")
+                                .and_then(|c| c.as_str())
+                                .map(|c| c.contains("panda") && c.contains("focus"))
+                                .unwrap_or(false)
+                        })
+                    })
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
 }
 
 // ─── History view (--history) ─────────────────────────────────────────────────

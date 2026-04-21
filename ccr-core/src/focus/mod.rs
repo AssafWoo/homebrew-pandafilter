@@ -11,5 +11,6 @@ pub mod assembler;
 
 pub use graph::{open_readwrite, open_readonly, is_valid as graph_is_valid, update_embedding};
 pub use indexer::{run_index, Meta};
-pub use query::{query, query_with_read_boosts, RankedFile};
+pub use query::{query, query_with_read_boosts, query_hybrid, RankedFile};
 pub use assembler::{assemble, GuidanceOutput, FileEntry};
+pub use symbols::apply_structural;

@@ -50,45 +50,14 @@ pub fn assemble(
     }
 }
 
-/// Build negative guidance: files and patterns to explicitly avoid.
+/// Build negative guidance — intentionally empty.
 ///
-/// Returns actionable exclusion messages based on common noise patterns
-/// and file roles not represented in the recommendations.
-fn build_negative_guidance(recommended: &[FileEntry]) -> Vec<String> {
-    if recommended.is_empty() {
-        return vec![];
-    }
-
-    let mut guidance = Vec::new();
-
-    // Identify which roles are already covered
-    let has_tests = recommended.iter().any(|f| f.role == "test");
-    let has_persistence = recommended.iter().any(|f| f.role == "persistence");
-
-    // Add exclusion guidance for common noise patterns
-    let mut exclusions = Vec::new();
-
-    // Always exclude vendor/dependencies
-    exclusions.push("node_modules/, vendor/, .git/ (dependencies)");
-
-    // Suggest skipping test files if not already recommended
-    if !has_tests {
-        exclusions.push("*_test.rs, *_test.py, test/ (tests)");
-    }
-
-    // Suggest skipping old/legacy code if persistence isn't recommended
-    if !has_persistence {
-        exclusions.push("old/, legacy/, deprecated/ (obsolete code)");
-    }
-
-    if !exclusions.is_empty() {
-        guidance.push(format!(
-            "Skip these file patterns to avoid distraction: {}",
-            exclusions.join("; ")
-        ));
-    }
-
-    guidance
+/// Exclusion lists are not emitted: telling the agent to skip files it hasn't
+/// read creates a hard miss when the ranking is wrong (~14% of queries). Ranked
+/// recommendations already surface the most likely files; the agent discovers
+/// the rest naturally if the hints don't pan out.
+fn build_negative_guidance(_recommended: &[FileEntry]) -> Vec<String> {
+    vec![]
 }
 
 /// Format guidance as human-readable text for injection into context.
@@ -97,7 +66,7 @@ fn format_guidance(recommended: &[FileEntry], total_files: usize) -> String {
         return "## Context Focus\nNo specific files identified as most relevant.".to_string();
     }
 
-    let mut text = String::from("## Context Focus\nRelevant files to prioritize:\n");
+    let mut text = String::from("## Context Focus\nMost likely relevant files (all files remain accessible):\n");
 
     for (i, file) in recommended.iter().take(6).enumerate() {
         // Format role for display
@@ -117,12 +86,6 @@ fn format_guidance(recommended: &[FileEntry], total_files: usize) -> String {
             role_display
         ));
     }
-
-    let excluded_count = total_files.saturating_sub(recommended.len());
-    text.push_str(&format!(
-        "\n{} other files in this repo — focus on the above for efficiency.",
-        excluded_count
-    ));
 
     text
 }
@@ -157,7 +120,7 @@ mod tests {
         assert!(text.contains("Entry Point"));
         assert!(text.contains("src/db.rs"));
         assert!(text.contains("Database/Storage"));
-        assert!(text.contains("48 other files"));
+        assert!(text.contains("all files remain accessible"));
     }
 
     #[test]

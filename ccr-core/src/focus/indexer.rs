@@ -29,6 +29,13 @@ const SKIP_DIRS: &[&str] = &[
     ".git", ".idea", ".vscode", "node_modules", "target", ".gradle",
     "dist", "__pycache__", ".next", ".nuxt", "vendor", "third_party",
     ".cache", ".fastembed_cache", "build", "out", ".dart_tool", ".pub-cache",
+    // Noise directories: test data, docs — not useful for code retrieval.
+    // Note: "samples" and "example(s)" are intentionally omitted — Java packages
+    // like org.springframework.samples.* and monorepo sub-package examples/ would
+    // be incorrectly excluded. is_noise_path() handles these at query time instead.
+    "testdata", "test-data", "fixtures", "fixture",
+    "examples", "docs", "doc", "documentation", "docs_src",
+    "e2e", "benchmarks", "website", "paradox", "i18n",
 ];
 
 /// File extensions that are always skipped.
@@ -37,6 +44,10 @@ const SKIP_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "gif", "ico", "woff", "woff2", "ttf", "eot", "pdf",
     "zip", "tar", "gz", "exe", "dll", "so", "dylib", "a", "o",
     "json", "xml", "iml",
+    // Prose documentation — not useful for code retrieval
+    "md", "mdx", "rst", "adoc", "asciidoc",
+    // Java/Spring config files — not useful for code retrieval
+    "properties", "jmx",
 ];
 
 // ---------------------------------------------------------------------------
@@ -363,6 +374,7 @@ struct FileRecord {
     role: &'static str,
     role_confidence: f64,
     embed_text: String,
+    signatures: String,
 }
 
 fn full_build(repo_root: &Path, conn: &rusqlite::Connection) -> Result<()> {
@@ -378,7 +390,7 @@ fn full_build(repo_root: &Path, conn: &rusqlite::Connection) -> Result<()> {
     for entry in walker {
         let path = entry.path();
 
-        // Skip directories
+        // Skip directories (by name only — leaf component)
         if path.is_dir() {
             let name = path.file_name()
                 .and_then(|n| n.to_str())
@@ -390,8 +402,16 @@ fn full_build(repo_root: &Path, conn: &rusqlite::Connection) -> Result<()> {
             continue;
         }
 
-        // Skip files whose path contains a skipped directory component
-        let skip = path.components().any(|c| {
+        // Get relative path before component check so we don't match path components
+        // from the repo_root itself (e.g. a "benchmarks/" parent dir in the host path).
+        let rel = match path.strip_prefix(repo_root) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let rel_str = rel.to_string_lossy().to_string();
+
+        // Skip files whose RELATIVE path contains a skipped directory component
+        let skip = rel.components().any(|c| {
             let s = c.as_os_str().to_string_lossy();
             should_skip_dir(&s)
         });
@@ -404,13 +424,6 @@ fn full_build(repo_root: &Path, conn: &rusqlite::Connection) -> Result<()> {
             continue;
         }
 
-        // Get relative path
-        let rel = match path.strip_prefix(repo_root) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        let rel_str = rel.to_string_lossy().to_string();
-
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
             Err(_) => continue,
@@ -418,15 +431,22 @@ fn full_build(repo_root: &Path, conn: &rusqlite::Connection) -> Result<()> {
 
         let (role, role_confidence) = classify_role(&rel_str);
 
-        // Build embedding input: filename + first N chars of content
-        let content_prefix: String = content.chars().take(EMBED_CONTENT_CHARS).collect();
-        let embed_text = format!("{}\n{}", rel_str, content_prefix);
+        // Build embedding input: structural signatures (API surface) when available,
+        // falling back to first N chars for unsupported types (data formats, shell, etc.)
+        let sigs = crate::focus::symbols::apply_structural(&content, &rel_str);
+        let embed_text = if sigs.trim().is_empty() {
+            let content_prefix: String = content.chars().take(EMBED_CONTENT_CHARS).collect();
+            format!("{}\n{}", rel_str, content_prefix)
+        } else {
+            format!("{}\n{}", rel_str, sigs)
+        };
 
         files.push(FileRecord {
             rel_path: rel_str,
             role,
             role_confidence,
             embed_text,
+            signatures: sigs,
         });
     }
 
@@ -446,8 +466,8 @@ fn full_build(repo_root: &Path, conn: &rusqlite::Connection) -> Result<()> {
             conn.execute(
                 "INSERT OR REPLACE INTO files
                  (path, role, role_confidence, commit_count, updated_at, symbols, signatures, embedding)
-                 VALUES (?1, ?2, ?3, 0, ?4, '', '', ?5)",
-                rusqlite::params![file.rel_path, file.role, file.role_confidence, epoch as i64, blob],
+                 VALUES (?1, ?2, ?3, 0, ?4, '', ?5, ?6)",
+                rusqlite::params![file.rel_path, file.role, file.role_confidence, epoch as i64, file.signatures, blob],
             )?;
         }
     }

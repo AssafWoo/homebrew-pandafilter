@@ -1,5 +1,6 @@
 pub mod compress;
 pub mod discover;
+pub mod mcp;
 pub mod doctor;
 pub mod expand;
 pub mod filter;
