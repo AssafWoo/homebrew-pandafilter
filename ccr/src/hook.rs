@@ -61,6 +61,14 @@ pub fn run() -> Result<()> {
                 home.join(".cursor").join("hooks").join("panda-rewrite.sh"),
                 home.join(".cursor").join("hooks"),
             ),
+            "codex" => (
+                home.join(".codex").join("panda-rewrite.sh"),
+                home.join(".codex"),
+            ),
+            "windsurf" => (
+                home.join(".codeium").join("windsurf").join("panda-rewrite.sh"),
+                home.join(".codeium").join("windsurf"),
+            ),
             _ => (
                 home.join(".claude").join("hooks").join("panda-rewrite.sh"),
                 home.join(".claude").join("hooks"),

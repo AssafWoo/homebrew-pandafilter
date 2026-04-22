@@ -467,7 +467,7 @@ function SectionOverview() {
         { value: '82%',   label: 'token reduction across 47 handlers', color: T.cyan   },
         { value: '85.6%', label: 'file retrieval success rate',        color: T.cyan   },
         { value: '59',    label: 'command handlers built-in',          color: T.violet },
-        { value: '5',     label: 'AI agents supported',                color: T.emerald },
+        { value: '7',     label: 'AI agents supported',                color: T.emerald },
       ]} />
 
       <P>
@@ -512,13 +512,21 @@ curl -fsSL https://raw.githubusercontent.com/AssafWoo/homebrew-pandafilter/main/
       </Callout>
 
       <H2 id="quick-start">Quick start</H2>
-      <P>Wire PandaFilter into your AI agent with a single command:</P>
+      <P>
+        One command installs for every AI agent you have. PandaFilter detects what's on your
+        machine and skips anything that isn't there.
+      </P>
+      <CodeBlock lang="bash">{`panda init --agent all`}</CodeBlock>
+
+      <P>Or target a specific agent:</P>
       <CodeBlock lang="bash">{`
-panda init                         # Claude Code (default)
-panda init --agent cursor          # Cursor
-panda init --agent gemini          # Gemini CLI
-panda init --agent cline           # Cline
-panda init --agent copilot         # VS Code Copilot
+panda init                          # Claude Code (default)
+panda init --agent cursor           # Cursor
+panda init --agent gemini           # Gemini CLI
+panda init --agent codex            # Codex (CLI + VS Code extension)
+panda init --agent windsurf         # Windsurf
+panda init --agent cline            # Cline
+panda init --agent copilot          # VS Code Copilot
       `}</CodeBlock>
 
       <P>
@@ -538,16 +546,87 @@ panda gain            # see token savings from this session
   )
 }
 
+function AgentCard({
+  name, cmd, color, config, script, desc, logo, note,
+}: {
+  name: string; cmd: string; color: string; config: string;
+  script: string; desc: string; logo: string; note?: string;
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, padding: '16px 18px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
+        <span style={{ fontSize: 17, color, lineHeight: 1 }}>{logo}</span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: T.text }}>{name}</span>
+        {note && (
+          <span style={{
+            fontSize: 10, padding: '2px 7px', borderRadius: 999,
+            background: 'rgba(167,139,250,0.1)', color: T.violet,
+            border: `1px solid rgba(167,139,250,0.2)`, marginLeft: 'auto',
+            whiteSpace: 'nowrap',
+          }}>{note}</span>
+        )}
+      </div>
+      <p style={{ fontSize: 12.5, color: T.sub, lineHeight: 1.6, marginBottom: 10, margin: '0 0 10px' }}>{desc}</p>
+      <div style={{
+        background: T.code, borderRadius: 6, padding: '7px 12px',
+        fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: T.cyan,
+        marginBottom: 8,
+      }}>
+        {cmd}
+      </div>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+          fontSize: 11.5, color: T.muted, display: 'flex', alignItems: 'center', gap: 4,
+          fontFamily: 'inherit',
+        }}
+      >
+        <span style={{ fontSize: 9, transition: 'transform 0.15s', display: 'inline-block', transform: open ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
+        {open ? 'Hide details' : 'Show details'}
+      </button>
+      {open && (
+        <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 5, paddingTop: 10, borderTop: `1px solid ${T.borderSoft}` }}>
+          <div style={{ fontSize: 11, color: T.muted }}>
+            <span style={{ color: T.sub, fontWeight: 600 }}>Config:  </span>
+            <code style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10.5 }}>{config}</code>
+          </div>
+          <div style={{ fontSize: 11, color: T.muted }}>
+            <span style={{ color: T.sub, fontWeight: 600 }}>Script:  </span>
+            <code style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10.5 }}>{script}</code>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AgentGroupLabel({ label, badge, color }: { label: string; badge: string; color: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, marginTop: 4 }}>
+      <span style={{ fontSize: 12.5, fontWeight: 700, color: T.text }}>{label}</span>
+      <span style={{
+        fontSize: 10.5, padding: '2px 9px', borderRadius: 999,
+        background: `rgba(${color},0.1)`, color: `rgb(${color})`,
+        border: `1px solid rgba(${color},0.22)`,
+      }}>{badge}</span>
+      <div style={{ flex: 1, height: 1, background: T.borderSoft }} />
+    </div>
+  )
+}
+
 function SectionAgents() {
   const isMobile = useIsMobile()
-  const agents = [
+
+  const hookAgents = [
     {
       name: 'Claude Code',
       cmd: 'panda init',
       color: T.cyan,
       config: '~/.claude/settings.json',
       script: '~/.claude/hooks/panda-rewrite.sh',
-      desc: 'Hooks wired into Claude\'s PreToolUse, PostToolUse, and UserPromptSubmit events.',
+      desc: 'PreToolUse, PostToolUse, and UserPromptSubmit hooks — the deepest integration available.',
       logo: '◆',
     },
     {
@@ -556,25 +635,47 @@ function SectionAgents() {
       color: T.violet,
       config: '~/.cursor/hooks.json',
       script: '~/.cursor/hooks/panda-rewrite.sh',
-      desc: 'Same hook architecture as Claude Code, using Cursor\'s hooks.json config.',
+      desc: 'Same hook architecture as Claude Code, via Cursor\'s native hooks.json config.',
       logo: '⬡',
     },
     {
       name: 'Gemini CLI',
       cmd: 'panda init --agent gemini',
       color: T.emerald,
-      config: '~/.gemini/hooks.json',
+      config: '~/.gemini/settings.json',
       script: '~/.gemini/panda-rewrite.sh',
-      desc: 'Hooks into Google\'s Gemini CLI tool-use pipeline via the gemini hooks config.',
+      desc: 'Hooks into Gemini CLI\'s BeforeTool event to rewrite and compress shell commands.',
       logo: '✦',
     },
+    {
+      name: 'Codex',
+      cmd: 'panda init --agent codex',
+      color: '#f97316',
+      config: '~/.codex/hooks.json',
+      script: '~/.codex/panda-rewrite.sh',
+      desc: 'PreToolUse and PostToolUse hooks — covers both the Codex CLI and its VS Code extension.',
+      logo: '⬙',
+      note: 'CLI + VS Code',
+    },
+    {
+      name: 'Windsurf',
+      cmd: 'panda init --agent windsurf',
+      color: '#0ea5e9',
+      config: '~/.codeium/windsurf/hooks.json',
+      script: '~/.codeium/windsurf/panda-rewrite.sh',
+      desc: 'pre_run_command and post_run_command hooks in Windsurf\'s Cascade agent system.',
+      logo: '◇',
+    },
+  ]
+
+  const rulesAgents = [
     {
       name: 'Cline',
       cmd: 'panda init --agent cline',
       color: T.amber,
       config: '.clinerules (project dir)',
       script: '— (rules-based)',
-      desc: 'Rules-based integration — injects filtering directives into the project\'s .clinerules file.',
+      desc: 'Injects panda run directives into .clinerules — the model follows them as instructions.',
       logo: '◈',
     },
     {
@@ -583,7 +684,7 @@ function SectionAgents() {
       color: T.indigo,
       config: '.github/hooks/panda-rewrite.json',
       script: '.github/hooks/panda-rewrite.sh',
-      desc: 'Stored per-project in .github/hooks — works with GitHub Copilot in VS Code.',
+      desc: 'Per-project rules in .github/hooks — works with GitHub Copilot Chat in VS Code.',
       logo: '◎',
     },
   ]
@@ -606,47 +707,57 @@ function SectionAgents() {
   return (
     <>
       <H2 id="agents">Supported agents</H2>
-      <P>
-        PandaFilter supports five AI coding agents. All share the same filtering binary and pipeline.
-        Run <Code>panda init</Code> to wire it in — the command writes the necessary hooks and
-        verifies the installation automatically.
-      </P>
 
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 12, marginBottom: 28 }}>
-        {agents.map(({ name, cmd, color, config, script, desc, logo }) => (
-          <div key={name} style={{
-            background: T.card, border: `1px solid ${T.border}`, borderRadius: 10,
-            padding: '18px 20px',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-              <span style={{ fontSize: 18, color, lineHeight: 1 }}>{logo}</span>
-              <span style={{ fontSize: 14.5, fontWeight: 700, color: T.text }}>{name}</span>
-            </div>
-            <p style={{ fontSize: 12.5, color: T.sub, lineHeight: 1.6, marginBottom: 12 }}>{desc}</p>
-            <div style={{
-              background: T.code, borderRadius: 6, padding: '7px 12px',
-              fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: T.cyan,
-              marginBottom: 10,
-            }}>
-              {cmd}
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <div style={{ fontSize: 11, color: T.muted }}>
-                <span style={{ color: T.sub, fontWeight: 600 }}>Config: </span>{config}
-              </div>
-              <div style={{ fontSize: 11, color: T.muted }}>
-                <span style={{ color: T.sub, fontWeight: 600 }}>Script: </span>{script}
-              </div>
-            </div>
+      {/* Hero: --agent all */}
+      <div style={{
+        background: 'linear-gradient(135deg, rgba(34,211,238,0.06) 0%, rgba(167,139,250,0.04) 100%)',
+        border: `1px solid ${T.border}`, borderRadius: 12,
+        padding: '20px 24px', marginBottom: 28,
+        display: 'flex', flexDirection: isMobile ? 'column' : 'row',
+        gap: isMobile ? 16 : 24, alignItems: isMobile ? 'flex-start' : 'center',
+      }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: T.text, marginBottom: 6 }}>
+            Install for all agents at once
           </div>
-        ))}
-        {/* Intentional empty cell to keep grid balanced for odd count */}
-        <div />
+          <div style={{ fontSize: 13, color: T.sub, lineHeight: 1.6 }}>
+            Detects what's installed on your machine. Skips anything that isn't there.
+            No selection needed.
+          </div>
+        </div>
+        <div style={{
+          background: T.code, borderRadius: 8, padding: '10px 18px',
+          fontFamily: 'JetBrains Mono, monospace', fontSize: 13.5, color: T.cyan,
+          whiteSpace: 'nowrap', border: `1px solid ${T.border}`,
+          flexShrink: 0,
+        }}>
+          panda init --agent all
+        </div>
+      </div>
+
+      {/* Hook-based agents */}
+      <AgentGroupLabel
+        label="Hook-based"
+        badge="true pre/post interception"
+        color="34,211,238"
+      />
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10, marginBottom: 24 }}>
+        {hookAgents.map(agent => <AgentCard key={agent.name} {...agent} />)}
+      </div>
+
+      {/* Rules-based agents */}
+      <AgentGroupLabel
+        label="Rules-based"
+        badge="prompt injection"
+        color="245,158,11"
+      />
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10, marginBottom: 28 }}>
+        {rulesAgents.map(agent => <AgentCard key={agent.name} {...agent} />)}
       </div>
 
       <H3>Hook events</H3>
       <P>
-        All agents share the same three hook events. Each fires at a different point in the agent's
+        Hook-based agents share three event types. Each fires at a different point in the agent's
         request lifecycle.
       </P>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 24 }}>
@@ -1721,8 +1832,8 @@ config/     Embedded default filter patterns
 const SEARCH_INDEX = [
   { id: 'overview',       section: 'Getting Started', title: 'Overview',           keywords: 'pandafilter what is introduction token bill noise context window agent' },
   { id: 'install',        section: 'Getting Started', title: 'Install',            keywords: 'brew homebrew curl linux install setup macos' },
-  { id: 'quick-start',    section: 'Getting Started', title: 'Quick start',        keywords: 'panda init cursor gemini cline copilot wire agent doctor' },
-  { id: 'agents',          section: 'How It Works',    title: 'Supported agents',   keywords: 'agents claude cursor gemini cline copilot vscode init hook pretooluse posttooluse usersubmit supported' },
+  { id: 'quick-start',    section: 'Getting Started', title: 'Quick start',        keywords: 'panda init cursor gemini cline copilot codex windsurf wire agent doctor all' },
+  { id: 'agents',          section: 'How It Works',    title: 'Supported agents',   keywords: 'agents claude cursor gemini cline copilot vscode codex windsurf codeium openai init hook pretooluse posttooluse usersubmit supported all detect auto' },
   { id: 'pipeline',       section: 'How It Works',    title: 'Filtering pipeline', keywords: 'pipeline ansi whitespace regex ndjson summarize bert cap stage steps 200k 50k' },
   { id: 'bert',           section: 'How It Works',    title: 'BERT engine',        keywords: 'bert model embedding miniLM 384 dimensions anomaly cosine similarity noise useful entropy adaptive budget weights' },
   { id: 'handlers',       section: 'How It Works',    title: 'Handlers',           keywords: 'handlers cargo git pytest jest npm docker kubectl terraform eslint tsc 59 routing' },

@@ -11,6 +11,10 @@ enum AgentTarget {
     Gemini,
     /// Cline (.clinerules integration)
     Cline,
+    /// OpenAI Codex (CLI + VS Code extension)
+    Codex,
+    /// Windsurf (Codeium IDE)
+    Windsurf,
     /// Install for all detected agents
     All,
 }
@@ -207,18 +211,22 @@ fn main() {
         Commands::Hook => hook::run(),
         Commands::Index { repo } => cmd::index::run(repo),
         Commands::Init { uninstall, agent, skip_model } => match (uninstall, agent) {
-            (true,  AgentTarget::Claude)  => uninstall_panda(),
-            (true,  AgentTarget::Cursor)  => uninstall_cursor(),
-            (false, AgentTarget::Claude)  => init(skip_model),
-            (false, AgentTarget::Cursor)  => init_cursor(skip_model),
-            (false, AgentTarget::Copilot) => init_agent("copilot"),
-            (false, AgentTarget::Gemini)  => init_agent("gemini"),
-            (false, AgentTarget::Cline)   => init_agent("cline"),
-            (false, AgentTarget::All)     => init_all_agents(),
-            (true,  AgentTarget::Copilot) => uninstall_agent("copilot"),
-            (true,  AgentTarget::Gemini)  => uninstall_agent("gemini"),
-            (true,  AgentTarget::Cline)   => uninstall_agent("cline"),
-            (true,  AgentTarget::All)     => uninstall_all_agents(),
+            (true,  AgentTarget::Claude)    => uninstall_panda(),
+            (true,  AgentTarget::Cursor)    => uninstall_cursor(),
+            (false, AgentTarget::Claude)    => init(skip_model),
+            (false, AgentTarget::Cursor)    => init_cursor(skip_model),
+            (false, AgentTarget::Copilot)   => init_agent("copilot"),
+            (false, AgentTarget::Gemini)    => init_agent("gemini"),
+            (false, AgentTarget::Cline)     => init_agent("cline"),
+            (false, AgentTarget::Codex)     => init_agent("codex"),
+            (false, AgentTarget::Windsurf)  => init_agent("windsurf"),
+            (false, AgentTarget::All)       => init_all_agents(),
+            (true,  AgentTarget::Copilot)   => uninstall_agent("copilot"),
+            (true,  AgentTarget::Gemini)    => uninstall_agent("gemini"),
+            (true,  AgentTarget::Cline)     => uninstall_agent("cline"),
+            (true,  AgentTarget::Codex)     => uninstall_agent("codex"),
+            (true,  AgentTarget::Windsurf)  => uninstall_agent("windsurf"),
+            (true,  AgentTarget::All)       => uninstall_all_agents(),
         },
         Commands::Run { args } => cmd::run::run(args),
         Commands::Rewrite { command } => cmd::rewrite::run(command),
@@ -736,7 +744,10 @@ fn init_agent(agent: &str) -> anyhow::Result<()> {
     match crate::agents::get_installer(agent) {
         Some(installer) => installer.install(&panda_bin_str),
         None => {
-            anyhow::bail!("Unknown agent '{}'. Valid agents: copilot, gemini, cline", agent)
+            anyhow::bail!(
+                "Unknown agent '{}'. Valid agents: copilot, gemini, cline, codex, windsurf",
+                agent
+            )
         }
     }
 }
@@ -745,7 +756,10 @@ fn uninstall_agent(agent: &str) -> anyhow::Result<()> {
     match crate::agents::get_installer(agent) {
         Some(installer) => installer.uninstall(),
         None => {
-            anyhow::bail!("Unknown agent '{}'. Valid agents: copilot, gemini, cline", agent)
+            anyhow::bail!(
+                "Unknown agent '{}'. Valid agents: copilot, gemini, cline, codex, windsurf",
+                agent
+            )
         }
     }
 }
@@ -754,7 +768,7 @@ fn init_all_agents() -> anyhow::Result<()> {
     // Always install the Claude (default) agent first
     init(false)?;
     // Then attempt each new agent, printing warnings on failure
-    for agent in &["copilot", "gemini", "cline"] {
+    for agent in &["copilot", "gemini", "cline", "codex", "windsurf"] {
         if let Err(e) = init_agent(agent) {
             eprintln!("warning: could not install {} agent: {}", agent, e);
         }
@@ -765,7 +779,7 @@ fn init_all_agents() -> anyhow::Result<()> {
 fn uninstall_all_agents() -> anyhow::Result<()> {
     let _ = uninstall_panda();
     let _ = uninstall_cursor();
-    for agent in &["copilot", "gemini", "cline"] {
+    for agent in &["copilot", "gemini", "cline", "codex", "windsurf"] {
         if let Err(e) = uninstall_agent(agent) {
             eprintln!("warning: could not uninstall {} agent: {}", agent, e);
         }

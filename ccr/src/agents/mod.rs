@@ -3,8 +3,10 @@
 //! Adding a new agent: implement `AgentInstaller` and register in `get_installer()`.
 
 pub mod cline;
+pub mod codex;
 pub mod copilot;
 pub mod gemini;
+pub mod windsurf;
 
 /// Common interface for all agent hook installers.
 pub trait AgentInstaller {
@@ -20,8 +22,10 @@ pub trait AgentInstaller {
 pub fn get_installer(agent: &str) -> Option<Box<dyn AgentInstaller>> {
     match agent {
         "copilot" | "vscode" => Some(Box::new(copilot::CopilotInstaller)),
-        "gemini" => Some(Box::new(gemini::GeminiInstaller)),
-        "cline" => Some(Box::new(cline::ClineInstaller)),
-        _ => None,
+        "gemini"              => Some(Box::new(gemini::GeminiInstaller)),
+        "cline"               => Some(Box::new(cline::ClineInstaller)),
+        "codex"               => Some(Box::new(codex::CodexInstaller)),
+        "windsurf"            => Some(Box::new(windsurf::WindsurfInstaller)),
+        _                     => None,
     }
 }

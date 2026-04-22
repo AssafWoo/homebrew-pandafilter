@@ -37,14 +37,22 @@ curl -fsSL https://raw.githubusercontent.com/AssafWoo/homebrew-pandafilter/main/
 
 > **First run:** PandaFilter downloads the BERT model (~90 MB, `all-MiniLM-L6-v2`) from HuggingFace and caches it at `~/.cache/huggingface/`. Subsequent runs are instant.
 
-Then wire it into your agent:
+Then wire it in — one command installs for every AI agent you have:
 
 ```bash
-panda init                              # Claude Code (default)
-panda init --agent cursor               # Cursor
-panda init --agent gemini               # Gemini CLI
-panda init --agent cline                # Cline
-panda init --agent copilot              # VS Code Copilot
+panda init --agent all
+```
+
+Auto-detects Claude Code, Cursor, Gemini CLI, Codex, Windsurf, Cline, and VS Code Copilot. Skips anything that isn't installed. Or target one specifically:
+
+```bash
+panda init                          # Claude Code (default)
+panda init --agent cursor           # Cursor
+panda init --agent gemini           # Gemini CLI
+panda init --agent codex            # Codex (CLI + VS Code extension)
+panda init --agent windsurf         # Windsurf
+panda init --agent cline            # Cline
+panda init --agent copilot          # VS Code Copilot
 ```
 
 ---
@@ -351,17 +359,23 @@ State tracked via `PANDA_SESSION_ID=$PPID`, stored at `~/.local/share/panda/sess
 </details>
 
 <details>
-<summary><strong>Hook architecture</strong></summary>
+<summary><strong>Supported agents (7)</strong></summary>
 
-| Agent | Config | Script |
-|-------|--------|--------|
-| Claude Code | `~/.claude/settings.json` | `~/.claude/hooks/panda-rewrite.sh` |
-| Cursor | `~/.cursor/hooks.json` | `~/.cursor/hooks/panda-rewrite.sh` |
-| Gemini CLI | `~/.gemini/hooks.json` | `~/.gemini/panda-rewrite.sh` |
-| Cline | `.clinerules` (project dir) | — (rules-based) |
-| VS Code Copilot | `.github/hooks/panda-rewrite.json` | `.github/hooks/panda-rewrite.sh` |
+All agents share the same binary and filtering pipeline. `panda init --agent all` installs for everything detected on your machine in one shot.
 
-All agents share the same binary and filtering pipeline.
+| Agent | Install | Config |
+|-------|---------|--------|
+| Claude Code | `panda init` | `~/.claude/settings.json` |
+| Cursor | `panda init --agent cursor` | `~/.cursor/hooks.json` |
+| Gemini CLI | `panda init --agent gemini` | `~/.gemini/settings.json` |
+| Codex (CLI + VS Code) | `panda init --agent codex` | `~/.codex/hooks.json` |
+| Windsurf | `panda init --agent windsurf` | `~/.codeium/windsurf/hooks.json` |
+| Cline | `panda init --agent cline` | `.clinerules` (project dir) |
+| VS Code Copilot | `panda init --agent copilot` | `.github/hooks/` (project dir) |
+
+**Hook-based agents** (Claude Code, Cursor, Gemini, Codex, Windsurf) intercept every command before and after execution via the agent's native hook system.
+
+**Rules-based agents** (Cline, Copilot) inject `panda run <cmd>` directives into the agent's context file, relying on the model to follow them.
 
 **PreToolUse:** known handler → rewrites to `panda run <cmd>`; unknown → no-op; already wrapped → no double-wrap; compound commands → each segment rewritten independently.
 
@@ -390,11 +404,13 @@ config/     Embedded default filter patterns
 <summary><strong>Uninstall</strong></summary>
 
 ```bash
-panda init --uninstall                        # Claude Code
-panda init --agent cursor --uninstall         # Cursor
-panda init --agent gemini --uninstall         # Gemini CLI
-panda init --agent cline --uninstall          # Cline
-panda init --agent copilot --uninstall        # VS Code Copilot
+panda init --uninstall                            # Claude Code
+panda init --agent cursor   --uninstall           # Cursor
+panda init --agent gemini   --uninstall           # Gemini CLI
+panda init --agent codex    --uninstall           # Codex
+panda init --agent windsurf --uninstall           # Windsurf
+panda init --agent cline    --uninstall           # Cline
+panda init --agent copilot  --uninstall           # VS Code Copilot
 
 brew uninstall pandafilter && brew untap AssafWoo/pandafilter   # Homebrew
 # or: cargo uninstall panda
