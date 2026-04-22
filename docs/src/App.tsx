@@ -1534,6 +1534,7 @@ unless_pattern = "error"
 }
 
 function SecurityDiagram() {
+  const isMobile = useIsMobile()
   const W = 780, H = 258
 
   // named colours used inside SVG (can't reference T.* directly in SVG attributes without interpolation)
@@ -1545,6 +1546,80 @@ function SecurityDiagram() {
   const emerald = T.emerald
   const card    = '#0d1117'
   const sidebar = T.sidebar
+
+  if (isMobile) {
+    return (
+      <div style={{
+        background: T.card, border: `1px solid ${T.border}`,
+        borderRadius: 12, padding: '20px 16px', marginBottom: 28,
+      }}>
+        <svg viewBox="0 0 300 420" style={{ width: '100%', display: 'block' }}>
+          <defs>
+            <marker id="sc-m-c" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill={cyan}/>
+            </marker>
+            <marker id="sc-m-g" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill={muted}/>
+            </marker>
+            <marker id="sc-m-r" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill={red}/>
+            </marker>
+            <filter id="sc-m-glow" x="-60%" y="-60%" width="220%" height="220%">
+              <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="blur"/>
+              <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+            </filter>
+            <linearGradient id="sc-m-lg" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#111827"/><stop offset="100%" stopColor={card}/>
+            </linearGradient>
+            <linearGradient id="sc-m-rg" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#071a12"/><stop offset="100%" stopColor={card}/>
+            </linearGradient>
+          </defs>
+
+          {/* TOP BOX — raw tool output */}
+          <rect x="30" y="8" width="240" height="90" rx="10" fill="url(#sc-m-lg)" stroke={border} strokeWidth="1.5"/>
+          <rect x="30" y="8" width="240" height="28" rx="10" fill={sidebar}/>
+          <rect x="30" y="22" width="240" height="14" fill={sidebar}/>
+          <text x="150" y="20" textAnchor="middle" fill={sub} fontSize="9.5" fontWeight="700" fontFamily="Inter,sans-serif" letterSpacing="0.06em">RAW TOOL OUTPUT</text>
+          <text x="150" y="48" textAnchor="middle" fill={muted} fontSize="9" fontFamily="Inter,sans-serif">cargo build · pytest · npm install</text>
+          <text x="150" y="62" textAnchor="middle" fill={muted} fontSize="9" fontFamily="Inter,sans-serif">docker build · git diff · terraform plan</text>
+          <rect x="100" y="74" width="100" height="14" rx="4" fill="rgba(239,68,68,0.1)" stroke="rgba(239,68,68,0.25)" strokeWidth="1"/>
+          <text x="150" y="84" textAnchor="middle" fill={red} fontSize="8.5" fontFamily="Inter,sans-serif">thousands of tokens</text>
+
+          {/* Arrow down: raw → logo */}
+          <path d="M 150 98 L 150 138" stroke={muted} strokeWidth="1.5" strokeDasharray="5 3" fill="none" markerEnd="url(#sc-m-g)"/>
+          <text x="162" y="120" fill={muted} fontSize="8.5" fontFamily="Inter,sans-serif">intercepted</text>
+
+          {/* LOGO HUB */}
+          <circle cx="150" cy="163" r="50" fill="rgba(34,211,238,0.04)" stroke="rgba(34,211,238,0.12)" strokeWidth="1" filter="url(#sc-m-glow)"/>
+          <circle cx="150" cy="163" r="38" fill={sidebar} stroke={cyan} strokeWidth="1.5"/>
+          <image href={`${import.meta.env.BASE_URL}logo.png`} x="134" y="147" width="32" height="32"/>
+          <text x="150" y="200" textAnchor="middle" fill={muted} fontSize="8" fontFamily="Inter,sans-serif">on-device</text>
+
+          {/* Arrow down: logo → right box */}
+          <path d="M 150 214 L 150 250" stroke={cyan} strokeWidth="2" fill="none" markerEnd="url(#sc-m-c)"/>
+          <text x="162" y="234" fill={cyan} fontSize="8.5" fontFamily="Inter,sans-serif" opacity="0.85">filtered</text>
+
+          {/* BOTTOM BOX — agent context */}
+          <rect x="30" y="254" width="240" height="100" rx="10" fill="url(#sc-m-rg)" stroke={border} strokeWidth="1.5"/>
+          <rect x="30" y="254" width="240" height="28" rx="10" fill={sidebar}/>
+          <rect x="30" y="268" width="240" height="14" fill={sidebar}/>
+          <text x="150" y="266" textAnchor="middle" fill={sub} fontSize="9.5" fontWeight="700" fontFamily="Inter,sans-serif" letterSpacing="0.06em">AGENT CONTEXT</text>
+          <text x="150" y="292" textAnchor="middle" fill={emerald} fontSize="9" fontFamily="Inter,sans-serif">✓  errors &amp; warnings kept</text>
+          <text x="150" y="306" textAnchor="middle" fill={emerald} fontSize="9" fontFamily="Inter,sans-serif">✓  test failures kept</text>
+          <text x="150" y="320" textAnchor="middle" fill={muted} fontSize="9" fontFamily="Inter,sans-serif">noise removed · 60–99% fewer tokens</text>
+          <rect x="95" y="330" width="110" height="14" rx="4" fill="rgba(52,211,153,0.08)" stroke="rgba(52,211,153,0.25)" strokeWidth="1"/>
+          <text x="150" y="340" textAnchor="middle" fill={emerald} fontSize="8.5" fontFamily="Inter,sans-serif">nothing useful dropped</text>
+
+          {/* Blocked internet — side note */}
+          <path d="M 150 356 L 150 386" stroke={red} strokeWidth="1.5" strokeDasharray="4 3" fill="none" markerEnd="url(#sc-m-r)"/>
+          <rect x="65" y="390" width="170" height="28" rx="8" fill="rgba(239,68,68,0.07)" stroke="rgba(239,68,68,0.28)" strokeWidth="1"/>
+          <text x="150" y="405" textAnchor="middle" fill={red} fontSize="9" fontFamily="Inter,sans-serif" fontWeight="600">✗  internet / external APIs</text>
+          <text x="150" y="415" textAnchor="middle" fill={muted} fontSize="8" fontFamily="Inter,sans-serif">nothing leaves your machine</text>
+        </svg>
+      </div>
+    )
+  }
 
   return (
     <div style={{
@@ -1675,6 +1750,7 @@ function SecurityDiagram() {
 }
 
 function SectionSecurity() {
+  const isMobile = useIsMobile()
   const guarantees = [
     {
       icon: '🔒',
@@ -1731,7 +1807,7 @@ function SectionSecurity() {
       </P>
 
       <div style={{
-        display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 28,
+        display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 12, marginBottom: 28,
       }}>
         {guarantees.map(({ icon, title, color, body }) => (
           <div key={title} style={{
