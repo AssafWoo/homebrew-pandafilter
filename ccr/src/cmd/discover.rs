@@ -144,8 +144,9 @@ pub fn run() -> Result<()> {
     }
 
     if by_cmd.is_empty() {
-        println!("No unoptimized Bash commands found in history.");
-        return Ok(());
+        // All commands are already wrapped by PandaFilter (panda run ...) or
+        // history is empty — fall back to the DB low-compression report.
+        return run_db_report();
     }
 
     // Load actual measured savings ratios from analytics.jsonl (beats static estimates)
@@ -191,8 +192,10 @@ pub fn run() -> Result<()> {
     });
 
     if opportunities.is_empty() {
-        println!("All detected commands are already optimized with panda run.");
-        return Ok(());
+        // JSONL is empty or all commands are already wrapped — fall through to
+        // DB-based low-compression report, which is always available once PandaFilter
+        // has run sessions.
+        return run_db_report();
     }
 
     println!("PandaFilter Discover — Missed Savings");
@@ -239,49 +242,134 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-/// Load per-command savings ratios from analytics.jsonl.
-/// Returns a map of command → actual savings ratio (0.0–1.0).
-fn load_actual_savings_ratios() -> BTreeMap<String, f32> {
-    let path = match dirs::data_local_dir() {
-        Some(d) => d.join("panda").join("analytics.jsonl"),
-        None => return BTreeMap::new(),
-    };
+/// Show commands that ARE running through PandaFilter but with low compression —
+/// candidates for custom filter rules in panda.toml.
+fn run_db_report() -> anyhow::Result<()> {
+    use rusqlite::params;
 
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(_) => return BTreeMap::new(),
-    };
+    let conn = crate::analytics_db::open()?;
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let cutoff = now_secs.saturating_sub(30 * 86400) as i64;
 
-    // Aggregate: cmd -> (total_input_tokens, total_output_tokens)
-    let mut totals: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    // Commands with ≥5 runs, meaningful input, and <35% weighted savings
+    // Exclude internal pseudo-commands like (read-delta), (pipeline), etc.
+    let mut stmt = conn.prepare(
+        "SELECT command,
+                COUNT(*) as runs,
+                COALESCE(SUM(input_tokens), 0) as total_in,
+                COALESCE(SUM(output_tokens), 0) as total_out
+         FROM records
+         WHERE timestamp_secs >= ?1
+           AND command NOT LIKE '(%'
+           AND input_tokens > 0
+         GROUP BY command
+         HAVING runs >= 5
+            AND total_in > 2000
+            AND CAST(total_in - total_out AS REAL) / total_in < 0.35
+         ORDER BY total_in DESC
+         LIMIT 15",
+    )?;
 
-    for line in content.lines() {
-        let Ok(record) = serde_json::from_str::<panda_core::analytics::Analytics>(line) else {
-            continue;
-        };
-        if let Some(cmd) = &record.command {
-            let entry = totals.entry(cmd.clone()).or_insert((0, 0));
-            entry.0 += record.input_tokens;
-            entry.1 += record.output_tokens;
-        }
+    struct Row { command: String, runs: i64, total_in: i64, total_out: i64 }
+
+    let rows: Vec<Row> = stmt
+        .query_map(params![cutoff], |r| {
+            Ok(Row {
+                command: r.get(0)?,
+                runs: r.get(1)?,
+                total_in: r.get(2)?,
+                total_out: r.get(3)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if rows.is_empty() {
+        println!("PandaFilter Discover");
+        println!("════════════════════");
+        println!();
+        println!("All commands running through PandaFilter are compressing well (≥35% savings).");
+        println!("Nothing to tune. Run `panda gain --breakdown` to see per-command details.");
+        return Ok(());
     }
 
-    totals
-        .into_iter()
-        .filter_map(|(cmd, (input, output))| {
-            if input == 0 {
-                return None;
-            }
-            let saved = input.saturating_sub(output);
-            let ratio = saved as f32 / input as f32;
-            // Only report ratios with a meaningful sample
-            if ratio > 0.0 {
-                Some((cmd, ratio))
-            } else {
-                None
-            }
-        })
-        .collect()
+    println!("PandaFilter Discover — Low-Compression Commands (last 30 days)");
+    println!("══════════════════════════════════════════════════════════════");
+    println!("These commands run through PandaFilter but save less than 35%.");
+    println!("Adding custom rules in .panda/filters.toml can improve them.");
+    println!();
+    println!("{:<18} {:>5}  {:>8}  {:>7}  {}",
+        "COMMAND", "RUNS", "TOKENS IN", "SAVINGS", "OPPORTUNITY");
+    println!("{}", "─".repeat(62));
+
+    for row in &rows {
+        let savings_pct = if row.total_in > 0 {
+            (row.total_in - row.total_out) as f64 / row.total_in as f64 * 100.0
+        } else { 0.0 };
+
+        let potential = ((row.total_in as f64 * 0.60) - (row.total_in - row.total_out) as f64).max(0.0) as usize;
+        let bar_len = ((1.0 - savings_pct / 100.0) * 10.0) as usize;
+        let bar = "█".repeat(bar_len.min(10));
+
+        println!("{:<18} {:>5}  {:>8}  {:>6.0}%  +~{}tok potential {}",
+            row.command,
+            row.runs,
+            format_tokens(row.total_in as usize),
+            savings_pct,
+            format_tokens(potential),
+            bar,
+        );
+    }
+
+    println!("{}", "─".repeat(62));
+    println!();
+    println!("Tip: add a [commands.<name>] block in .panda/filters.toml to");
+    println!("     remove noisy lines and improve compression for these commands.");
+
+    Ok(())
+}
+
+fn format_tokens(n: usize) -> String {
+    if n >= 1_000_000 { format!("{:.1}M", n as f64 / 1_000_000.0) }
+    else if n >= 1_000 { format!("{:.1}k", n as f64 / 1_000.0) }
+    else { format!("{}", n) }
+}
+
+/// Load per-command token-weighted savings ratios from the analytics SQLite DB.
+/// Returns a map of command → actual savings ratio (0.0–1.0).
+fn load_actual_savings_ratios() -> BTreeMap<String, f32> {
+    let Ok(conn) = crate::analytics_db::open() else {
+        return BTreeMap::new();
+    };
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT command, SUM(input_tokens), SUM(output_tokens) \
+         FROM records \
+         WHERE command IS NOT NULL AND input_tokens > 0 \
+         GROUP BY command"
+    ) else {
+        return BTreeMap::new();
+    };
+
+    stmt.query_map([], |row| {
+        let cmd: String = row.get(0)?;
+        let input: i64 = row.get(1)?;
+        let output: i64 = row.get(2)?;
+        Ok((cmd, input, output))
+    })
+    .ok()
+    .map(|rows| {
+        rows.filter_map(|r| r.ok())
+            .filter_map(|(cmd, input, output)| {
+                if input == 0 { return None; }
+                let ratio = (input - output).max(0) as f32 / input as f32;
+                if ratio > 0.0 { Some((cmd, ratio)) } else { None }
+            })
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 fn collect_jsonl(dir: &Path, out: &mut Vec<std::path::PathBuf>) {

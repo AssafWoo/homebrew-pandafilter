@@ -596,14 +596,24 @@ pub fn get_quality_signals(days: u32) -> Result<QualitySignals> {
     let conn = open()?;
     let cutoff = now_secs().saturating_sub(days as u64 * 86400) as i64;
 
-    let (total_records, cache_hits, sum_savings): (i64, i64, f64) = conn
+    // Use token-weighted savings (same formula as the banner) so quality score
+    // agrees with what the user sees. Simple AVG(savings_pct) is misleading because
+    // many small/zero-savings runs drag it down even when big commands save 90%+.
+    let (total_records, cache_hits, total_input, total_output): (i64, i64, i64, i64) = conn
         .query_row(
-            "SELECT COUNT(*), COALESCE(SUM(cache_hit), 0), COALESCE(AVG(savings_pct), 0.0) \
+            "SELECT COUNT(*), COALESCE(SUM(cache_hit), 0), \
+                    COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0) \
              FROM records WHERE timestamp_secs >= ?1",
             params![cutoff],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
-        .unwrap_or((0, 0, 0.0));
+        .unwrap_or((0, 0, 0, 0));
+
+    let sum_savings = if total_input > 0 {
+        (total_input - total_output) as f64 / total_input as f64 * 100.0
+    } else {
+        0.0
+    };
 
     // Delta/structural re-reads are stored with command = "(read-delta)" or "(read-structural)"
     let delta_reads: i64 = conn

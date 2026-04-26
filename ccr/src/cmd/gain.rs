@@ -121,7 +121,7 @@ pub fn run(history: bool, days: u32, breakdown: bool, insight: bool) -> Result<(
     } else if history {
         print_history(&records, days);
     } else {
-        print_summary(&records, breakdown);
+        print_summary(&records, breakdown, days);
     }
 
     Ok(())
@@ -136,7 +136,7 @@ fn load_records() -> Result<Vec<Analytics>> {
 
 // ─── Summary view (default) ────────────────────────────────────────────────────
 
-fn print_summary(records: &[Analytics], breakdown: bool) {
+fn print_summary(records: &[Analytics], breakdown: bool, days: u32) {
     // Split legacy (timestamp=0) records from dated ones.
     // Legacy records have no timestamp and cannot be placed in any date window.
     let (legacy, dated): (Vec<&Analytics>, Vec<&Analytics>) =
@@ -395,7 +395,7 @@ fn print_summary(records: &[Analytics], breakdown: bool) {
     }
 
     // ── Quality score banner ──
-    print_quality_banner(90);
+    print_quality_banner(days);
 
     // ── Focus tip (shown only when focus hook is not yet registered) ──
     if !is_focus_registered() {
@@ -1217,27 +1217,28 @@ pub fn compute_quality_score(days: u32) -> Option<(f64, &'static str)> {
         return None;
     }
 
-    // Compression signal: 0-100 based on avg savings %, capped at 90%
+    // Compression signal (50%): token-weighted savings — matches the banner number.
+    // Full marks at 90%+ savings; scales linearly below that.
     let compression_signal = (signals.avg_savings_pct / 90.0 * 100.0).min(100.0);
 
-    // Cache hit rate signal: 0-100
+    // Cache hit rate signal (10%): bonus for pre-run cache hits.
     let cache_signal = signals.cache_hit_rate * 100.0;
 
-    // Delta read rate signal: 0-100
+    // Delta read rate signal (10%): bonus for delta/structural re-reads.
     let delta_signal = signals.delta_read_rate * 100.0;
 
-    // Activity signal: 100 if ≥30 records, scales down
+    // Activity signal (15%): 100 if ≥30 records, scales down for new installs.
     let activity_signal = (signals.total_records as f64 / 30.0 * 100.0).min(100.0);
 
-    // Savings consistency: penalize if avg savings < 30% (below par)
+    // Consistency signal (15%): penalize if weighted savings < 30%.
     let consistency_signal = if signals.avg_savings_pct >= 30.0 { 100.0 }
         else { signals.avg_savings_pct / 30.0 * 100.0 };
 
-    let score = compression_signal * 0.25
-        + cache_signal * 0.20
-        + delta_signal * 0.20
+    let score = compression_signal * 0.50
+        + cache_signal * 0.10
+        + delta_signal * 0.10
         + activity_signal * 0.15
-        + consistency_signal * 0.20;
+        + consistency_signal * 0.15;
 
     let grade = quality_grade(score);
     Some((score, grade))
@@ -1304,36 +1305,43 @@ fn print_quality_insight(days: u32) {
     let delta_signal = signals.delta_read_rate * 100.0;
 
     println!(
-        "    Compression     {:.0}/100  {}  (avg {:.0}% savings)",
+        "    Token savings   {:.0}/100  {}  ({:.0}% saved, token-weighted)",
         compression_signal,
         bar(compression_signal).if_supports_color(Stdout, |t| t.green()),
         signals.avg_savings_pct,
     );
     println!(
-        "    Cache hits      {:.0}/100  {}  ({:.0}% of runs)",
+        "    Pre-run cache   {:.0}/100  {}  ({:.0}% of runs matched cache)",
         cache_signal,
         bar(cache_signal).if_supports_color(Stdout, |t| t.cyan()),
         cache_signal,
     );
     println!(
-        "    Delta re-reads  {:.0}/100  {}  ({:.0}% of file reads)",
+        "    Delta re-reads  {:.0}/100  {}  ({:.0}% of file reads were diffs)",
         delta_signal,
         bar(delta_signal).if_supports_color(Stdout, |t| t.cyan()),
         delta_signal,
     );
 
-    // Actionable tips for low signals
-    if delta_signal < 20.0 {
+    // Actionable tips — only shown when the signal is low AND actionable
+    if delta_signal < 5.0 && signals.total_records > 50 {
         println!(
             "    {}",
-            "Tip: re-reads send full files — delta mode activates automatically on repeated reads."
+            "Tip: 0 repeated file reads detected. Delta diffs fire automatically when the same file is read twice in a session."
                 .if_supports_color(Stdout, |t| t.dimmed()),
         );
     }
     if compression_signal < 40.0 {
         println!(
             "    {}",
-            "Tip: low compression — check `panda discover` for unoptimized commands."
+            "Tip: low token savings — run `panda discover` to find unoptimized commands."
+                .if_supports_color(Stdout, |t| t.dimmed()),
+        );
+    }
+    if compression_signal >= 70.0 && cache_signal < 5.0 {
+        println!(
+            "    {}",
+            "Tip: great savings! Cache bonus kicks in when commands repeat with identical output."
                 .if_supports_color(Stdout, |t| t.dimmed()),
         );
     }
