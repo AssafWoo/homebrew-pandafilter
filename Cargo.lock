@@ -1992,6 +1992,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "fastembed",
+ "libc",
  "once_cell",
  "regex",
  "rusqlite",

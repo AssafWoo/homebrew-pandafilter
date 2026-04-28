@@ -51,6 +51,29 @@ fn effective_critical_pattern() -> Regex {
 // ── P8: Configurable BERT model ───────────────────────────────────────────────
 
 static MODEL_NAME: OnceCell<String> = OnceCell::new();
+static NICE_LEVEL: OnceCell<i32> = OnceCell::new();
+
+pub fn set_nice_level(level: i32) {
+    let _ = NICE_LEVEL.set(level);
+}
+
+#[cfg(unix)]
+fn apply_nice_once() {
+    static APPLIED: std::sync::Once = std::sync::Once::new();
+    APPLIED.call_once(|| {
+        if let Some(&level) = NICE_LEVEL.get() {
+            if level > 0 {
+                unsafe {
+                    *libc::__errno_location() = 0;
+                    let ret = libc::nice(level);
+                    if ret == -1 && *libc::__errno_location() != 0 {
+                        eprintln!("[panda] warning: nice({}) failed", level);
+                    }
+                }
+            }
+        }
+    });
+}
 
 /// Set the BERT model name to use. Must be called before the first summarization.
 /// First call wins (subsequent calls are no-ops).
@@ -188,16 +211,28 @@ fn compute_centroid(embeddings: &[Vec<f32>]) -> Vec<f32> {
     centroid
 }
 
-fn embed_and_normalize(texts: Vec<&str>) -> anyhow::Result<Vec<Vec<f32>>> {
-    if let Some(embeddings) = crate::embed_client::daemon_embed(&texts, true) {
-        return Ok(embeddings);
-    }
+pub fn embed_direct(texts: Vec<&str>) -> anyhow::Result<Vec<Vec<f32>>> {
     let model = get_model()?;
     let mut embeddings = model.embed(texts, None)?;
     for emb in &mut embeddings {
         l2_normalize(emb);
     }
     Ok(embeddings)
+}
+
+pub fn embed_raw(texts: Vec<&str>) -> anyhow::Result<Vec<Vec<f32>>> {
+    let model = get_model()?;
+    model.embed(texts, None).map_err(Into::into)
+}
+
+fn embed_and_normalize(texts: Vec<&str>) -> anyhow::Result<Vec<Vec<f32>>> {
+    #[cfg(unix)]
+    if let Some(embeddings) = crate::embed_client::daemon_embed(&texts, true) {
+        return Ok(embeddings);
+    }
+    #[cfg(unix)]
+    apply_nice_once();
+    embed_direct(texts)
 }
 
 // ── Public result types ───────────────────────────────────────────────────────

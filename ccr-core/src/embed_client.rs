@@ -1,32 +1,30 @@
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
+static SOCKET_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+fn socket_dir() -> &'static PathBuf {
+    SOCKET_DIR.get_or_init(|| {
+        if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+            PathBuf::from(runtime_dir).join("panda")
+        } else {
+            let uid = unsafe { libc::getuid() };
+            PathBuf::from(format!("/tmp/panda-{}", uid))
+        }
+    })
+}
+
 pub fn socket_path() -> PathBuf {
-    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        PathBuf::from(runtime_dir).join("panda").join("embed.sock")
-    } else if let Ok(uid) = std::env::var("UID").or_else(|_| {
-        std::process::Command::new("id")
-            .arg("-u")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .ok_or(std::env::VarError::NotPresent)
-    }) {
-        PathBuf::from(format!("/tmp/panda-{}", uid)).join("embed.sock")
-    } else {
-        PathBuf::from("/tmp/panda-embed.sock")
-    }
+    socket_dir().join("embed.sock")
 }
 
 pub fn pid_path() -> PathBuf {
-    let mut p = socket_path();
-    p.set_file_name("embed.pid");
-    p
+    socket_dir().join("embed.pid")
 }
 
 pub fn daemon_embed(texts: &[&str], normalize: bool) -> Option<Vec<Vec<f32>>> {
@@ -97,17 +95,12 @@ fn send_request(
 }
 
 fn try_auto_start() {
-    let pid = pid_path();
-    if pid.exists() {
-        // Daemon may be starting up — don't spawn another
-        return;
-    }
-
     let exe = match std::env::current_exe() {
         Ok(e) => e,
         Err(_) => return,
     };
 
+    // `daemon start` is idempotent — it checks liveness and exits if already running.
     let _ = std::process::Command::new(exe)
         .args(["daemon", "start"])
         .stdin(std::process::Stdio::null())

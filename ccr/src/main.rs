@@ -210,11 +210,8 @@ fn main() {
     // Apply config-driven model selection and extra keep patterns before any BERT use.
     // set_model_name is no-op after first call, so this must run before any summarization.
     if let Ok(config) = config_loader::load_config() {
-        #[cfg(unix)]
-        if config.global.nice_level > 0 {
-            unsafe { libc::nice(config.global.nice_level); }
-        }
         panda_core::summarizer::set_model_name(&config.global.bert_model);
+        panda_core::summarizer::set_nice_level(config.global.nice_level);
         panda_core::summarizer::set_extra_keep_patterns(config.global.hard_keep_patterns.clone());
     }
 
