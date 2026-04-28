@@ -105,6 +105,10 @@ pub struct GlobalConfig {
     /// Default 10. Set to 0 to disable.
     #[serde(default = "default_nice_level")]
     pub nice_level: i32,
+    /// Number of ONNX Runtime intra-op threads. Default 2.
+    /// Higher values speed up large batches but compete with the editor/LSP.
+    #[serde(default = "default_ort_threads")]
+    pub ort_threads: usize,
 }
 
 fn default_input_char_ceiling() -> usize {
@@ -121,6 +125,10 @@ fn default_bert_model() -> String {
 
 fn default_nice_level() -> i32 {
     10
+}
+
+fn default_ort_threads() -> usize {
+    2
 }
 
 fn default_state_commands() -> Vec<String> {
@@ -148,6 +156,7 @@ impl Default for GlobalConfig {
             use_router: false,
             router_exploration_noise: false,
             nice_level: default_nice_level(),
+            ort_threads: default_ort_threads(),
         }
     }
 }

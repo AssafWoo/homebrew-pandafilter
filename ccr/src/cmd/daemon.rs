@@ -138,6 +138,7 @@ fn daemon_main(sock_path: PathBuf, pid_path: PathBuf) -> Result<()> {
             }
         }
         panda_core::summarizer::set_model_name(&config.global.bert_model);
+        panda_core::summarizer::set_ort_threads(config.global.ort_threads);
     }
     if panda_core::summarizer::preload_model().is_err() {
         let _ = std::fs::remove_file(&pid_path);

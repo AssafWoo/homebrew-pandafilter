@@ -212,6 +212,7 @@ fn main() {
     if let Ok(config) = config_loader::load_config() {
         panda_core::summarizer::set_model_name(&config.global.bert_model);
         panda_core::summarizer::set_nice_level(config.global.nice_level);
+        panda_core::summarizer::set_ort_threads(config.global.ort_threads);
         panda_core::summarizer::set_extra_keep_patterns(config.global.hard_keep_patterns.clone());
     }
 

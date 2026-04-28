@@ -13,7 +13,10 @@ thiserror.workspace = true
 tiktoken-rs.workspace = true
 once_cell = "1"
 libc = "0.2"
-fastembed = "4"
+ort = { version = "=2.0.0-rc.12", features = ["std", "ndarray", "download-binaries", "tls-native"], default-features = false }
+tokenizers = { version = "0.21", features = ["onig"], default-features = false }
+ndarray = "0.17"
+hf-hub = { version = "0.4", features = ["ureq", "native-tls"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 walkdir = "2"
 
