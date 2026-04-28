@@ -188,13 +188,11 @@ fn compute_centroid(embeddings: &[Vec<f32>]) -> Vec<f32> {
     centroid
 }
 
-/// Embed `texts` and L2-normalize every output vector.
-/// All downstream similarity calls can then use `dot` instead of full cosine similarity,
-/// eliminating two sqrt calls per pair.
-fn embed_and_normalize(
-    model: &fastembed::TextEmbedding,
-    texts: Vec<&str>,
-) -> anyhow::Result<Vec<Vec<f32>>> {
+fn embed_and_normalize(texts: Vec<&str>) -> anyhow::Result<Vec<Vec<f32>>> {
+    if let Some(embeddings) = crate::embed_client::daemon_embed(&texts, true) {
+        return Ok(embeddings);
+    }
+    let model = get_model()?;
     let mut embeddings = model.embed(texts, None)?;
     for emb in &mut embeddings {
         l2_normalize(emb);
@@ -290,14 +288,13 @@ fn summarize_semantic_intent(
         return Ok(lines.join("\n"));
     }
 
-    let model = get_model()?;
 
     // Embed lines + command + intent in one batch
     let mut texts: Vec<&str> = indexed_lines.iter().map(|(_, l)| *l).collect();
     texts.push(command);
     texts.push(intent);
 
-    let all_embeddings = embed_and_normalize(model, texts)?;
+    let all_embeddings = embed_and_normalize(texts)?;
     let n = indexed_lines.len();
     let cmd_emb = &all_embeddings[n];
     let intent_emb = &all_embeddings[n + 1];
@@ -406,7 +403,6 @@ fn summarize_semantic(
         return Ok(lines.join("\n"));
     }
 
-    let model = get_model()?;
 
     // Embed lines + optional query in one batch, L2-normalizing all vectors so
     // downstream similarity calls reduce to plain dot products.
@@ -416,7 +412,7 @@ fn summarize_semantic(
         texts.push(q);
     }
 
-    let all_embeddings = embed_and_normalize(model, texts)?;
+    let all_embeddings = embed_and_normalize(texts)?;
     let query_emb: Option<&Vec<f32>> = if has_query { all_embeddings.last() } else { None };
     let embeddings = if has_query {
         &all_embeddings[..all_embeddings.len() - 1]
@@ -584,9 +580,8 @@ fn summarize_semantic_anchored(
         if let Some(pre) = precomputed.filter(|p| p.len() == n) {
             pre
         } else {
-            let model = get_model()?;
             let texts: Vec<&str> = indexed_lines.iter().map(|(_, l)| *l).collect();
-            embed_and_normalize(model, texts)?
+            embed_and_normalize(texts)?
         };
 
     let centroid = compute_centroid(&embeddings);
@@ -721,16 +716,11 @@ pub fn entropy_adjusted_budget(text: &str, max_budget: usize) -> usize {
         return max_budget;
     }
 
-    let model = match get_model() {
-        Ok(m) => m,
-        Err(_) => return max_budget,
-    };
-
     // Sample up to 100 lines evenly to avoid O(N²) cost on huge inputs
     let step = (lines.len() / 100).max(1);
     let sample: Vec<&str> = lines.iter().step_by(step).copied().collect();
 
-    let embeddings = match embed_and_normalize(model, sample) {
+    let embeddings = match embed_and_normalize(sample) {
         Ok(e) => e,
         Err(_) => return max_budget,
     };
@@ -885,9 +875,8 @@ fn summarize_sentences_semantic(
     budget: usize,
     hard_keep: impl Fn(&str) -> bool,
 ) -> anyhow::Result<String> {
-    let model = get_model()?;
     let texts: Vec<&str> = sentences.iter().map(|s| s.as_str()).collect();
-    let embeddings = embed_and_normalize(model, texts)?;
+    let embeddings = embed_and_normalize(texts)?;
 
     let centroid = compute_centroid(&embeddings);
 
@@ -993,9 +982,8 @@ fn do_cluster_summarize(
         if let Some(pre) = precomputed.filter(|p| p.len() == n) {
             pre
         } else {
-            let model = get_model()?;
             let texts: Vec<&str> = indexed.iter().map(|(_, l)| *l).collect();
-            embed_and_normalize(model, texts)?
+            embed_and_normalize(texts)?
         };
 
     // ── Greedy clustering ────────────────────────────────────────────────────
@@ -1145,9 +1133,8 @@ fn summarize_against_centroid_inner(
         return Ok(lines.join("\n"));
     }
 
-    let model = get_model()?;
     let texts: Vec<&str> = indexed_lines.iter().map(|(_, l)| *l).collect();
-    let embeddings = embed_and_normalize(model, texts)?;
+    let embeddings = embed_and_normalize(texts)?;
 
     // Normalize the historical centroid at the point of use so it is compatible with
     // the unit-length line embeddings regardless of when it was stored (before or after
@@ -1231,19 +1218,13 @@ static NOISE_EMB: OnceCell<Vec<f32>> = OnceCell::new();
 
 fn useful_embedding() -> anyhow::Result<&'static Vec<f32>> {
     USEFUL_EMB.get_or_try_init(|| {
-        let model = get_model()?;
-        let mut emb = model.embed(vec![USEFUL_PROTOTYPE], None)?.remove(0);
-        l2_normalize(&mut emb);
-        Ok(emb)
+        Ok(embed_and_normalize(vec![USEFUL_PROTOTYPE])?.remove(0))
     })
 }
 
 fn noise_embedding() -> anyhow::Result<&'static Vec<f32>> {
     NOISE_EMB.get_or_try_init(|| {
-        let model = get_model()?;
-        let mut emb = model.embed(vec![NOISE_PROTOTYPE], None)?.remove(0);
-        l2_normalize(&mut emb);
-        Ok(emb)
+        Ok(embed_and_normalize(vec![NOISE_PROTOTYPE])?.remove(0))
     })
 }
 
@@ -1258,11 +1239,10 @@ pub fn noise_scores(lines: &[&str]) -> anyhow::Result<Vec<f32>> {
         return Ok(vec![]);
     }
 
-    let model = get_model()?;
     let useful_emb = useful_embedding()?;
     let noise_emb = noise_embedding()?;
 
-    let embeddings = embed_and_normalize(model, lines.to_vec())?;
+    let embeddings = embed_and_normalize(lines.to_vec())?;
 
     let scores = embeddings
         .iter()
@@ -1305,12 +1285,11 @@ pub fn noise_filter_with_embeddings(
         return Ok((lines.iter().map(|s| s.to_string()).collect(), vec![]));
     }
 
-    let model = get_model()?;
     let useful_emb = useful_embedding()?;
     let noise_emb = noise_embedding()?;
 
     let texts: Vec<&str> = non_empty.iter().map(|(_, l)| *l).collect();
-    let embeddings = embed_and_normalize(model, texts)?;
+    let embeddings = embed_and_normalize(texts)?;
 
     // Mark noisy lines for removal
     let mut drop_set: std::collections::HashSet<usize> = std::collections::HashSet::new();
@@ -1344,8 +1323,7 @@ pub fn noise_filter_with_embeddings(
 // ── Batch embedding (public) ──────────────────────────────────────────────────
 
 pub fn embed_batch(texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
-    let model = get_model()?;
-    embed_and_normalize(model, texts.to_vec())
+    embed_and_normalize(texts.to_vec())
 }
 
 /// Compute the mean embedding of all non-empty lines in `text`.
@@ -1393,8 +1371,7 @@ pub fn compute_centroid_from_embeddings(embeddings: &[Vec<f32>]) -> Vec<f32> {
 
 /// Compute semantic similarity between two texts. Used as a quality gate on generative output.
 pub fn semantic_similarity(a: &str, b: &str) -> anyhow::Result<f32> {
-    let model = get_model()?;
-    let embeddings = embed_and_normalize(model, vec![a, b])?;
+    let embeddings = embed_and_normalize(vec![a, b])?;
     Ok(dot(&embeddings[0], &embeddings[1]))
 }
 

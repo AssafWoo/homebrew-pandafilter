@@ -3,6 +3,7 @@ pub mod ansi;
 pub mod global_rules;
 pub mod config;
 pub mod delta;
+pub mod embed_client;
 pub mod focus;
 pub mod jsonlog;
 pub mod ndjson;

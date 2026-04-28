@@ -1,4 +1,5 @@
 pub mod compress;
+pub mod daemon;
 pub mod discover;
 pub mod mcp;
 pub mod doctor;

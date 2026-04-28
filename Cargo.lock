@@ -1970,6 +1970,7 @@ dependencies = [
  "clap",
  "dirs 5.0.1",
  "hex",
+ "libc",
  "once_cell",
  "owo-colors",
  "panda-core",

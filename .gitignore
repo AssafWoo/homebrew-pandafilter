@@ -6,3 +6,6 @@ ccr-eval/benchmarks/reports/sigmap-reference.json
 ccr-eval/benchmarks/reports/retrieval-baseline.json
 ccr-eval/benchmarks/indexes/
 ccr-eval/benchmarks/repos/
+
+# AgentOps session artifacts
+.agents/

@@ -88,6 +88,11 @@ enum Commands {
         #[arg(long)]
         share: bool,
     },
+    /// Manage the embedding daemon (holds BERT model resident for fast inference)
+    Daemon {
+        #[command(subcommand)]
+        action: cmd::daemon::DaemonAction,
+    },
     /// Diagnose CCR installation: hook scripts, settings, analytics DB
     Doctor,
     /// PostToolUse hook mode for Claude Code (hidden)
@@ -205,6 +210,10 @@ fn main() {
     // Apply config-driven model selection and extra keep patterns before any BERT use.
     // set_model_name is no-op after first call, so this must run before any summarization.
     if let Ok(config) = config_loader::load_config() {
+        #[cfg(unix)]
+        if config.global.nice_level > 0 {
+            unsafe { libc::nice(config.global.nice_level); }
+        }
         panda_core::summarizer::set_model_name(&config.global.bert_model);
         panda_core::summarizer::set_extra_keep_patterns(config.global.hard_keep_patterns.clone());
     }
@@ -216,6 +225,7 @@ fn main() {
         }
         Commands::Filter { command } => cmd::filter::run(command),
         Commands::Gain { history, days, breakdown, insight, share } => cmd::gain::run(history, days, breakdown, insight, share),
+        Commands::Daemon { action } => cmd::daemon::run(action),
         Commands::Doctor => cmd::doctor::run(),
         Commands::Hook { subcommand: Some(ref sub) } => hook::run_lifecycle(sub),
         Commands::Hook { subcommand: None } => hook::run(),
