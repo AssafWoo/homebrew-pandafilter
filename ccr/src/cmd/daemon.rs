@@ -9,6 +9,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use panda_core::embed_client;
 
 const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 900; // 15 minutes
+const BLOATED_IDLE_TIMEOUT_SECS: u64 = 60;  // 1 minute when RSS is high
+const RSS_BLOAT_THRESHOLD_MB: u64 = 500;
 
 #[derive(clap::Subcommand)]
 pub enum DaemonAction {
@@ -33,6 +35,14 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn current_rss_mb() -> u64 {
+    std::fs::read_to_string(format!("/proc/{}/statm", std::process::id()))
+        .ok()
+        .and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok())
+        .map(|pages| pages * 4096 / 1024 / 1024)
+        .unwrap_or(0)
 }
 
 fn ensure_dir(path: &Path) {
@@ -199,12 +209,20 @@ fn daemon_main(sock_path: PathBuf, pid_path: PathBuf) -> Result<()> {
     };
 
     // Idle timeout watchdog — sends SIGTERM to self to unblock poll().
+    // Uses a shorter timeout when RSS is high so the daemon shuts down quickly
+    // after a large embedding batch. Auto-start will spin up a fresh ~180MB
+    // daemon on the next request.
     let lr = last_request.clone();
     std::thread::spawn(move || {
         loop {
-            std::thread::sleep(Duration::from_secs(30));
+            std::thread::sleep(Duration::from_secs(10));
             let idle = now_secs().saturating_sub(lr.load(Ordering::Relaxed));
-            if idle > DEFAULT_IDLE_TIMEOUT_SECS {
+            let timeout = if current_rss_mb() > RSS_BLOAT_THRESHOLD_MB {
+                BLOATED_IDLE_TIMEOUT_SECS
+            } else {
+                DEFAULT_IDLE_TIMEOUT_SECS
+            };
+            if idle > timeout {
                 unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
                 break;
             }
