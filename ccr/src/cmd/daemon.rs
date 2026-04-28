@@ -125,6 +125,10 @@ fn daemon_main(sock_path: PathBuf, pid_path: PathBuf) -> Result<()> {
 
     let _ = std::fs::remove_file(&sock_path);
 
+    // Limit Rayon's global thread pool to 1 thread — the daemon serves requests
+    // sequentially, so parallel batch processing just wastes memory.
+    std::env::set_var("RAYON_NUM_THREADS", "1");
+
     // Apply nice level inside the daemon process only.
     if let Ok(config) = crate::config_loader::load_config() {
         #[cfg(unix)]
@@ -139,9 +143,35 @@ fn daemon_main(sock_path: PathBuf, pid_path: PathBuf) -> Result<()> {
         }
         panda_core::summarizer::set_model_name(&config.global.bert_model);
     }
+
+    // fastembed sets ONNX intra-op threads to available_parallelism(), which on
+    // Linux reads sched_getaffinity. Restrict to 2 CPUs before model init so ONNX
+    // creates 2 threads instead of all cores — cuts idle RSS from ~2GB to ~200MB.
+    // Restore full affinity afterwards so the daemon isn't CPU-pinned during inference.
+    #[cfg(unix)]
+    let saved_affinity = unsafe {
+        let mut old: libc::cpu_set_t = std::mem::zeroed();
+        libc::sched_getaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &mut old);
+
+        let mut restricted: libc::cpu_set_t = std::mem::zeroed();
+        libc::CPU_SET(0, &mut restricted);
+        libc::CPU_SET(1, &mut restricted);
+        libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &restricted);
+        old
+    };
+
     if panda_core::summarizer::preload_model().is_err() {
         let _ = std::fs::remove_file(&pid_path);
         std::process::exit(1);
+    }
+
+    #[cfg(unix)]
+    unsafe {
+        libc::sched_setaffinity(
+            0,
+            std::mem::size_of::<libc::cpu_set_t>(),
+            &saved_affinity,
+        );
     }
 
     // Set restrictive permissions before binding the socket.
