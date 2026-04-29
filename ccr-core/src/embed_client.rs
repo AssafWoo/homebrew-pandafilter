@@ -69,7 +69,7 @@ fn send_request(
     stream.read_exact(&mut len_buf).ok()?;
     let resp_len = u32::from_be_bytes(len_buf) as usize;
 
-    if resp_len > 100_000_000 {
+    if resp_len > 10_000_000 {
         return None;
     }
 

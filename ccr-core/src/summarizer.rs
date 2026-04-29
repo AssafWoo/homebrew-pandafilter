@@ -279,7 +279,13 @@ fn bert_sentinel() -> Option<std::path::PathBuf> {
 fn bert_is_cached(name: &str) -> bool {
     bert_sentinel()
         .and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|content| content.trim() == name)
+        .map(|content| {
+            let trimmed = content.trim();
+            // Pre-model-tracking sentinels were empty; treat as cached for the
+            // legacy default so existing installs upgrade without a confusing
+            // "downloading model" message.
+            trimmed == name || (trimmed.is_empty() && name == "AllMiniLML6V2")
+        })
         .unwrap_or(false)
 }
 

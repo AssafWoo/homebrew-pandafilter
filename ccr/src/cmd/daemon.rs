@@ -322,6 +322,28 @@ fn stop() -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+fn read_rss_mb(pid: u32) -> Option<u64> {
+    let s = std::fs::read_to_string(format!("/proc/{}/statm", pid)).ok()?;
+    let pages: u64 = s.split_whitespace().nth(1)?.parse().ok()?;
+    Some(pages * 4096 / 1024 / 1024)
+}
+
+#[cfg(target_os = "macos")]
+fn read_rss_mb(pid: u32) -> Option<u64> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let kb: u64 = std::str::from_utf8(&out.stdout).ok()?.trim().parse().ok()?;
+    Some(kb / 1024)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn read_rss_mb(_pid: u32) -> Option<u64> {
+    None
+}
+
 fn status() -> Result<()> {
     let pid = match read_pid() {
         Some(p) => p,
@@ -338,15 +360,7 @@ fn status() -> Result<()> {
 
     let sock = embed_client::socket_path();
 
-    let rss = std::fs::read_to_string(format!("/proc/{}/statm", pid))
-        .ok()
-        .and_then(|s| {
-            s.split_whitespace()
-                .nth(1)?
-                .parse::<u64>()
-                .ok()
-                .map(|pages| pages * 4096 / 1024 / 1024)
-        });
+    let rss = read_rss_mb(pid);
 
     println!("panda daemon running (pid {})", pid);
     println!("  socket: {}", sock.display());
