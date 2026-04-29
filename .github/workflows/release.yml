@@ -89,6 +89,7 @@ jobs:
           tar -xzf ort.tgz -C ort-extracted
           ORT_DIR=$(find ort-extracted -type d -name "onnxruntime-*" | head -1)
           echo "ORT_LIB_LOCATION=${ORT_DIR}/lib" >> "$GITHUB_ENV"
+          echo "ORT_PREFER_DYNAMIC_LINK=1" >> "$GITHUB_ENV"
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} -p panda
