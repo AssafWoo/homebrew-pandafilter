@@ -487,6 +487,53 @@ rm -rf ~/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2
 
 ---
 
+## NPU support (opt-in, Intel only)
+
+Panda's embedding model can run on an Intel NPU (e.g. Meteor Lake NPU 3720)
+through ONNX Runtime's OpenVINO execution provider. This is opt-in.
+
+### Build
+
+```bash
+cargo build --release --features openvino
+```
+
+Requires the OpenVINO 2024+ runtime — specifically `libopenvino_c.so` —
+discoverable at runtime (typically via `LD_LIBRARY_PATH` or a system package).
+`ort` itself ships the ONNX Runtime binary; only the OpenVINO runtime is your
+responsibility.
+
+### Configure
+
+In `panda.toml` (project or `~/.config/panda/config.toml`):
+
+```toml
+[global]
+execution_provider = "npu"   # "auto" | "cpu" | "npu"
+```
+
+Or override at runtime:
+
+```bash
+PANDA_NPU=npu panda daemon start    # force NPU for this daemon
+PANDA_NPU=cpu panda run cargo build # force CPU for this invocation
+```
+
+### How it works
+
+The first call to the embedder pays a one-time OpenVINO compile cost
+(~3–10 s on NPU 3720), cached on disk by OpenVINO under `~/.cache/OpenVINO/`.
+Run `panda daemon start` once at the beginning of a session and every
+subsequent embedding is sub-millisecond dispatch overhead from the warm
+session.
+
+If the OpenVINO EP fails to build a session (driver missing, NPU busy,
+unsupported op), panda silently falls back to CPU and logs one line on
+stderr. To make these failures fatal — useful when diagnosing whether the
+NPU is actually being used — set `PANDA_NPU_STRICT=1`.
+
+---
+
 ## FAQ
 
 **Does PandaFilter change what the agent can see?**
