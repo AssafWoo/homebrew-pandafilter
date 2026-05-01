@@ -9,6 +9,8 @@ pub mod focus;
 pub mod jsonlog;
 pub mod ndjson;
 pub mod patterns;
+#[cfg(feature = "openvino")]
+pub(crate) mod ov_embed;
 pub mod pipeline;
 pub mod router;
 pub mod sentence;
