@@ -425,11 +425,19 @@ fn get_ov_embedder() -> Option<&'static crate::ov_embed::OvEmbedder> {
 /// multi-second NPU compile happens once at start, not on the first client
 /// embed call.
 ///
-/// Returns `Some(())` on success, `None` if construction failed (in which
-/// case `OV_EMBEDDER` is cached as `None` and subsequent calls go to CPU).
+/// Returns `Ok(())` on success, `Err` when init failed and `PANDA_NPU_STRICT=1`
+/// is set (so the caller can fail loud). When strict mode is off, init failure
+/// is reported as `Ok(())` because `OV_EMBEDDER` caches `None` and subsequent
+/// calls degrade to CPU automatically.
 #[cfg(feature = "openvino")]
-pub fn preload_ov_embedder() -> Option<()> {
-    get_ov_embedder().map(|_| ())
+pub fn preload_ov_embedder() -> anyhow::Result<()> {
+    if get_ov_embedder().is_some() {
+        return Ok(());
+    }
+    if std::env::var("PANDA_NPU_STRICT").ok().as_deref() == Some("1") {
+        anyhow::bail!("PANDA_NPU_STRICT=1: OpenVINO NPU embedder failed to initialize");
+    }
+    Ok(())
 }
 
 /// Reports whether the OV embedder is currently active. Used by the smoke

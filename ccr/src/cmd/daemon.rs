@@ -153,10 +153,13 @@ fn daemon_main(sock_path: PathBuf, pid_path: PathBuf) -> Result<()> {
     #[cfg(feature = "openvino")]
     if panda_core::summarizer::current_ep() == "npu" {
         // Eagerly compile the model for NPU so the multi-second cost is
-        // paid here instead of on the first client embed call. If init
-        // fails the OV_EMBEDDER static caches None and subsequent calls
-        // go to CPU automatically.
-        let _ = panda_core::summarizer::preload_ov_embedder();
+        // paid here instead of on the first client embed call. Under
+        // PANDA_NPU_STRICT=1 a failure here is fatal; otherwise the
+        // OV_EMBEDDER static caches None and subsequent calls go to CPU.
+        if let Err(e) = panda_core::summarizer::preload_ov_embedder() {
+            eprintln!("[panda] daemon: {e}");
+            std::process::exit(1);
+        }
     }
     if panda_core::summarizer::preload_model().is_err() {
         std::process::exit(1);
