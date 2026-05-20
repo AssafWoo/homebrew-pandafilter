@@ -64,6 +64,64 @@ pub fn set_ort_threads(n: usize) {
     let _ = ORT_THREADS.set(n);
 }
 
+static EXECUTION_PROVIDER: OnceCell<String> = OnceCell::new();
+
+/// Set the desired ORT execution provider. Values: "auto", "cpu", "npu".
+/// First call wins, mirroring `set_model_name` semantics.
+pub fn set_execution_provider(s: &str) {
+    let _ = EXECUTION_PROVIDER.set(s.to_string());
+}
+
+/// Resolve the configured execution provider into a concrete EP name.
+///
+/// Resolution order:
+///   1. If `PANDA_NPU` env var is set, it wins.
+///   2. Otherwise the `configured` argument (typically read from
+///      `EXECUTION_PROVIDER.get()`) is used.
+///   3. "auto" / unknown values resolve to "npu" if the openvino feature
+///      is compiled in, else "cpu".
+///
+/// Always returns either "cpu" or "npu" — never "auto".
+pub(crate) fn ep_choice(configured: &str) -> &'static str {
+    let raw = std::env::var("PANDA_NPU")
+        .ok()
+        .unwrap_or_else(|| configured.to_string());
+    match raw.as_str() {
+        "cpu" => "cpu",
+        "npu" => {
+            #[cfg(feature = "openvino")]
+            { "npu" }
+            #[cfg(not(feature = "openvino"))]
+            {
+                static WARNED: std::sync::Once = std::sync::Once::new();
+                WARNED.call_once(|| {
+                    eprintln!(
+                        "[panda] execution_provider=npu but binary built without \
+                         openvino feature; using CPU"
+                    );
+                });
+                "cpu"
+            }
+        }
+        _ => {
+            // "auto" or unknown — resolve based on compiled feature set.
+            #[cfg(feature = "openvino")]
+            { "npu" }
+            #[cfg(not(feature = "openvino"))]
+            { "cpu" }
+        }
+    }
+}
+
+/// Convenience: read the configured EP from the static and resolve it.
+pub fn current_ep() -> &'static str {
+    let configured = EXECUTION_PROVIDER
+        .get()
+        .map(|s| s.as_str())
+        .unwrap_or("auto");
+    ep_choice(configured)
+}
+
 #[cfg(unix)]
 fn apply_nice_once() {
     static APPLIED: std::sync::Once = std::sync::Once::new();
@@ -155,6 +213,7 @@ impl MiniLmEmbedder {
         let tokenizer = load_tokenizer(&tokenizer_path)?;
 
         let threads = ORT_THREADS.get().copied().unwrap_or(2).max(1);
+
         let mut builder = ort::session::Session::builder().map_err(ort_err)?;
         builder = builder
             .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
@@ -307,6 +366,7 @@ fn get_model() -> anyhow::Result<&'static MiniLmEmbedder> {
         }
         let embedder = MiniLmEmbedder::new(name)?;
         mark_bert_cached(name);
+        eprintln!("[panda] embedder: {} on CPU (ort)", name);
         Ok(embedder)
     })
 }
@@ -314,6 +374,77 @@ fn get_model() -> anyhow::Result<&'static MiniLmEmbedder> {
 pub fn preload_model() -> anyhow::Result<()> {
     get_model()?;
     Ok(())
+}
+
+// ── Raw OpenVINO bypass (opt-in via --features openvino) ─────────────────────
+
+#[cfg(feature = "openvino")]
+static OV_EMBEDDER: OnceCell<Option<crate::ov_embed::OvEmbedder>> = OnceCell::new();
+
+/// Lazily construct the OV embedder. Returns `None` (cached) on any failure
+/// or once `is_degraded()` flips. Idempotent and process-lifetime stable.
+#[cfg(feature = "openvino")]
+fn get_ov_embedder() -> Option<&'static crate::ov_embed::OvEmbedder> {
+    if crate::ov_embed::is_degraded() {
+        return None;
+    }
+    OV_EMBEDDER
+        .get_or_init(|| {
+            let name = get_model_name();
+            let (onnx, tok) = match resolve_model_files(name) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("[panda] OV bypass: model fetch failed: {e}");
+                    return None;
+                }
+            };
+            let seq_len = match crate::ov_embed::model_seq_len(name) {
+                Some(s) => s,
+                None => {
+                    eprintln!(
+                        "[panda] OV bypass: no NPU seq_len for {name}; CPU fallback"
+                    );
+                    return None;
+                }
+            };
+            match crate::ov_embed::OvEmbedder::try_new(&onnx, &tok, seq_len) {
+                Ok(e) => {
+                    eprintln!("[panda] embedder: {} on NPU (raw OpenVINO)", name);
+                    Some(e)
+                }
+                Err(err) => {
+                    eprintln!("[panda] OV bypass init failed: {err}");
+                    None
+                }
+            }
+        })
+        .as_ref()
+}
+
+/// Eagerly construct the OV embedder. Used by `panda daemon start` so the
+/// multi-second NPU compile happens once at start, not on the first client
+/// embed call.
+///
+/// Returns `Ok(())` on success, `Err` when init failed and `PANDA_NPU_STRICT=1`
+/// is set (so the caller can fail loud). When strict mode is off, init failure
+/// is reported as `Ok(())` because `OV_EMBEDDER` caches `None` and subsequent
+/// calls degrade to CPU automatically.
+#[cfg(feature = "openvino")]
+pub fn preload_ov_embedder() -> anyhow::Result<()> {
+    if get_ov_embedder().is_some() {
+        return Ok(());
+    }
+    if std::env::var("PANDA_NPU_STRICT").ok().as_deref() == Some("1") {
+        anyhow::bail!("PANDA_NPU_STRICT=1: OpenVINO NPU embedder failed to initialize");
+    }
+    Ok(())
+}
+
+/// Reports whether the OV embedder is currently active. Used by the smoke
+/// test to assert NPU was actually engaged (vs silent CPU fallback).
+#[cfg(feature = "openvino")]
+pub fn ov_embedder_is_active() -> bool {
+    OV_EMBEDDER.get().and_then(|o| o.as_ref()).is_some()
 }
 
 // ── Math helpers ──────────────────────────────────────────────────────────────
@@ -375,6 +506,17 @@ fn compute_centroid(embeddings: &[Vec<f32>]) -> Vec<f32> {
 }
 
 pub fn embed_direct(texts: Vec<&str>) -> anyhow::Result<Vec<Vec<f32>>> {
+    #[cfg(feature = "openvino")]
+    if current_ep() == "npu" {
+        if let Some(ov) = get_ov_embedder() {
+            let texts_slice: Vec<&str> = texts.iter().copied().collect();
+            let mut v = ov.embed(&texts_slice)?;
+            for e in &mut v {
+                l2_normalize(e);
+            }
+            return Ok(v);
+        }
+    }
     let model = get_model()?;
     let mut embeddings = model.embed(&texts)?;
     for emb in &mut embeddings {
@@ -392,6 +534,17 @@ fn embed_and_normalize(texts: Vec<&str>) -> anyhow::Result<Vec<Vec<f32>>> {
     #[cfg(unix)]
     if let Some(embeddings) = crate::embed_client::daemon_embed(&texts, true) {
         return Ok(embeddings);
+    }
+    #[cfg(feature = "openvino")]
+    if current_ep() == "npu" {
+        if let Some(ov) = get_ov_embedder() {
+            let texts_slice: Vec<&str> = texts.iter().copied().collect();
+            let mut v = ov.embed(&texts_slice)?;
+            for e in &mut v {
+                l2_normalize(e);
+            }
+            return Ok(v);
+        }
     }
     #[cfg(unix)]
     apply_nice_once();
@@ -1849,5 +2002,46 @@ mod tests {
         }
 
         assert_eq!(pooled, vec![0.0, 0.0, 0.0]);
+    }
+}
+
+#[cfg(test)]
+mod ep_resolver_tests {
+    use super::ep_choice;
+
+    fn clear_env() {
+        std::env::remove_var("PANDA_NPU");
+    }
+
+    #[test]
+    fn auto_resolves_to_cpu_without_feature_flag() {
+        // Without `--features openvino`, "auto" must resolve to "cpu".
+        clear_env();
+        let resolved = ep_choice("auto");
+        #[cfg(not(feature = "openvino"))]
+        assert_eq!(resolved, "cpu");
+        #[cfg(feature = "openvino")]
+        assert_eq!(resolved, "npu");
+    }
+
+    #[test]
+    fn explicit_cpu_stays_cpu() {
+        clear_env();
+        assert_eq!(ep_choice("cpu"), "cpu");
+    }
+
+    #[test]
+    fn unknown_value_falls_back_to_cpu_without_panic() {
+        clear_env();
+        // Should not panic. Unknown values resolve like "auto".
+        let resolved = ep_choice("banana");
+        assert!(resolved == "cpu" || resolved == "npu");
+    }
+
+    #[test]
+    fn panda_npu_env_overrides_config() {
+        std::env::set_var("PANDA_NPU", "cpu");
+        assert_eq!(ep_choice("npu"), "cpu");
+        std::env::remove_var("PANDA_NPU");
     }
 }

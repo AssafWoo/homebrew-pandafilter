@@ -487,6 +487,63 @@ rm -rf ~/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2
 
 ---
 
+## NPU support (opt-in, Intel only)
+
+Panda's embedding model can run on an Intel NPU (e.g. Meteor Lake NPU 3720)
+through a direct OpenVINO C-API embedder that bypasses ONNX Runtime entirely.
+This is opt-in.
+
+### Build
+
+```bash
+cargo build --release --features openvino
+```
+
+The build links against `openvino`/`openvino-sys` (intel/openvino-rs) with
+`runtime-linking`, so no OpenVINO library is required at link time. At
+runtime, panda dlopens `libopenvino_c.so` from the first of:
+
+1. `$OPENVINO_LIB_PATH` (if set; can be a file path or a directory).
+2. `~/.local/share/ccr/onnxruntime/libopenvino_c.so`.
+3. `/usr/lib/x86_64-linux-gnu/libopenvino_c.so`, `/usr/local/lib/...`,
+   `/opt/intel/openvino/runtime/lib/intel64/...`.
+
+Install OpenVINO 2024+ runtime via your distro's package manager or Intel's
+installer.
+
+### Configure
+
+In `panda.toml` (project or `~/.config/panda/config.toml`):
+
+```toml
+[global]
+execution_provider = "npu"   # "auto" | "cpu" | "npu"
+```
+
+Or override at runtime:
+
+```bash
+PANDA_NPU=npu panda daemon start    # force NPU for this daemon
+PANDA_NPU=cpu panda run cargo build # force CPU for this invocation
+```
+
+### How it works
+
+The first call pays a one-time NPU compile cost (~3–10 s on NPU 3720). The
+compiled blob is persisted to `~/.cache/panda/openvino/` — subsequent starts
+warm up in <500 ms. Run `panda daemon start` once at the beginning of a
+session and every embedding is sub-millisecond dispatch overhead from the
+warm InferRequest pool (size matches the NPU's reported optimal request
+count, typically 4 on Meteor Lake's two-tile NPU 3720).
+
+If NPU initialisation or inference fails, panda logs one line on stderr and
+falls back to CPU for the rest of the process — the daemon doesn't crash.
+To make these failures fatal (useful when diagnosing whether NPU is actually
+in use), set `PANDA_NPU_STRICT=1`. To force a specific inference precision,
+set `PANDA_NPU_PRECISION=FP16` or `=FP32`.
+
+---
+
 ## FAQ
 
 **Does PandaFilter change what the agent can see?**

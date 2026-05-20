@@ -11,6 +11,10 @@ path = "src/main.rs"
 name = "panda"
 path = "src/lib.rs"
 
+[features]
+default = []
+openvino = ["panda-core/openvino"]
+
 [dependencies]
 panda-core = { path = "../ccr-core" }
 panda-sdk  = { path = "../ccr-sdk"  }

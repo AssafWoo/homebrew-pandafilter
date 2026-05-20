@@ -109,6 +109,11 @@ pub struct GlobalConfig {
     /// Higher values speed up large batches but compete with the editor/LSP.
     #[serde(default = "default_ort_threads")]
     pub ort_threads: usize,
+    /// Which ONNX Runtime execution provider to use for embeddings.
+    /// Values: "auto" (NPU if compiled with --features openvino, else CPU),
+    /// "cpu", "npu". Override at runtime with PANDA_NPU=cpu|npu.
+    #[serde(default = "default_execution_provider")]
+    pub execution_provider: String,
 }
 
 fn default_input_char_ceiling() -> usize {
@@ -129,6 +134,10 @@ fn default_nice_level() -> i32 {
 
 fn default_ort_threads() -> usize {
     2
+}
+
+fn default_execution_provider() -> String {
+    "auto".to_string()
 }
 
 fn default_state_commands() -> Vec<String> {
@@ -157,6 +166,7 @@ impl Default for GlobalConfig {
             router_exploration_noise: false,
             nice_level: default_nice_level(),
             ort_threads: default_ort_threads(),
+            execution_provider: default_execution_provider(),
         }
     }
 }
@@ -262,4 +272,24 @@ pub struct MatchOutputConfig {
 pub enum SimpleAction {
     Remove,
     Collapse,
+}
+
+#[cfg(test)]
+mod execution_provider_tests {
+    use super::*;
+
+    #[test]
+    fn execution_provider_defaults_to_auto() {
+        let cfg: CcrConfig = toml::from_str("").unwrap();
+        assert_eq!(cfg.global.execution_provider, "auto");
+    }
+
+    #[test]
+    fn execution_provider_round_trips() {
+        let cfg: CcrConfig = toml::from_str(
+            "[global]\nexecution_provider = \"npu\"\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.global.execution_provider, "npu");
+    }
 }
