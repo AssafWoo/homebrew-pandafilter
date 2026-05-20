@@ -109,6 +109,9 @@ pub struct GlobalConfig {
     /// Higher values speed up large batches but compete with the editor/LSP.
     #[serde(default = "default_ort_threads")]
     pub ort_threads: usize,
+    /// Maximum number of commits shown by the git log handler. Default 25.
+    #[serde(default = "default_git_log_limit")]
+    pub git_log_limit: usize,
 }
 
 fn default_input_char_ceiling() -> usize {
@@ -129,6 +132,10 @@ fn default_nice_level() -> i32 {
 
 fn default_ort_threads() -> usize {
     2
+}
+
+fn default_git_log_limit() -> usize {
+    25
 }
 
 fn default_state_commands() -> Vec<String> {
@@ -157,6 +164,7 @@ impl Default for GlobalConfig {
             router_exploration_noise: false,
             nice_level: default_nice_level(),
             ort_threads: default_ort_threads(),
+            git_log_limit: default_git_log_limit(),
         }
     }
 }

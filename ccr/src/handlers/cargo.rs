@@ -4,6 +4,70 @@ use super::Handler;
 
 pub struct CargoHandler;
 
+struct AggregatedTestResult {
+    passed: usize,
+    failed: usize,
+    ignored: usize,
+    filtered_out: usize,
+    suites: usize,
+    duration: Option<f64>,
+}
+
+impl AggregatedTestResult {
+    fn new() -> Self {
+        Self { passed: 0, failed: 0, ignored: 0, filtered_out: 0, suites: 0, duration: None }
+    }
+
+    fn parse_and_merge(&mut self, line: &str) -> bool {
+        let re = re_test_result();
+        if let Some(cap) = re.captures(line) {
+            let status = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+            if status != "ok" && status != "FAILED" {
+                return false;
+            }
+            self.passed += cap.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0usize);
+            self.failed += cap.get(3).and_then(|m| m.as_str().parse().ok()).unwrap_or(0usize);
+            self.ignored += cap.get(4).and_then(|m| m.as_str().parse().ok()).unwrap_or(0usize);
+            self.filtered_out += cap.get(6).and_then(|m| m.as_str().parse().ok()).unwrap_or(0usize);
+            if let Some(d) = cap.get(7).and_then(|m| m.as_str().parse::<f64>().ok()) {
+                self.duration = Some(self.duration.map_or(d, |prev| if d > prev { d } else { prev }));
+            }
+            self.suites += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn format_compact(&self) -> String {
+        let mut parts = vec![format!("{} passed", self.passed)];
+        if self.failed > 0 {
+            parts.push(format!("{} failed", self.failed));
+        }
+        if self.ignored > 0 {
+            parts.push(format!("{} ignored", self.ignored));
+        }
+        if self.filtered_out > 0 {
+            parts.push(format!("{} filtered", self.filtered_out));
+        }
+        let meta = match (self.suites, self.duration) {
+            (s, Some(d)) => format!(" ({} suite{}, {:.2}s)", s, if s != 1 { "s" } else { "" }, d),
+            (s, None) if s > 1 => format!(" ({} suites)", s),
+            _ => String::new(),
+        };
+        format!("cargo test: {}{}", parts.join(", "), meta)
+    }
+}
+
+fn re_test_result() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(
+            r"test result: (\w+)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out(?:; finished in ([\d.]+)s)?"
+        ).expect("test result regex")
+    })
+}
+
 /// Find the cargo subcommand, skipping any toolchain override token (`+nightly`, `+stable`, etc.)
 /// that cargo allows between `cargo` and the subcommand.
 ///
@@ -215,16 +279,16 @@ fn filter_build(output: &str) -> String {
 }
 
 /// Filter `cargo test` standard output.
-/// Keeps failures, the final summary line, and failure detail sections.
+/// All-pass: aggregates suite results into a compact one-liner.
+/// Failures: shows up to 10 failures with truncated detail blocks.
 fn filter_test(output: &str) -> String {
-    let mut failures: Vec<String> = Vec::new();
-    let mut summary: Option<String> = None;
+    let mut summary_lines: Vec<String> = Vec::new();
     let mut in_failure_detail = false;
-    let mut failure_detail: Vec<String> = Vec::new();
     let mut failure_names: Vec<String> = Vec::new();
+    let mut current_failure: Vec<String> = Vec::new();
+    let mut failure_blocks: Vec<String> = Vec::new();
 
     for line in output.lines() {
-        // Detect failure test lines: "test some::path ... FAILED"
         if line.trim_start().starts_with("test ") && line.ends_with("FAILED") {
             let name = line
                 .trim_start()
@@ -234,54 +298,73 @@ fn filter_test(output: &str) -> String {
             failure_names.push(name);
         }
 
-        // Final result line
         if line.starts_with("test result:") {
-            summary = Some(line.to_string());
+            summary_lines.push(line.to_string());
+            in_failure_detail = false;
         }
 
-        // Failure detail sections
         if line.starts_with("failures:") {
             in_failure_detail = true;
+            continue;
         }
         if in_failure_detail {
-            failure_detail.push(line.to_string());
+            if line.trim().is_empty() && !current_failure.is_empty() {
+                failure_blocks.push(current_failure.join("\n"));
+                current_failure.clear();
+            } else if !line.trim().is_empty() && !line.starts_with("test result:") {
+                current_failure.push(line.to_string());
+            }
         }
     }
+    if !current_failure.is_empty() {
+        failure_blocks.push(current_failure.join("\n"));
+    }
 
-    // If all passed
     if failure_names.is_empty() {
-        if let Some(s) = summary {
-            // Count from summary line
-            return s;
+        let mut agg = AggregatedTestResult::new();
+        let mut any_parsed = false;
+        for s in &summary_lines {
+            if agg.parse_and_merge(s) {
+                any_parsed = true;
+            }
         }
-        return output.to_string();
+        if any_parsed {
+            return agg.format_compact();
+        }
+        return summary_lines.last().cloned().unwrap_or_else(|| output.to_string());
     }
 
-    // Build compact output
+    const MAX_FAILURES: usize = 10;
+    const FAILURE_CHAR_CAP: usize = 200;
     let mut out: Vec<String> = Vec::new();
-    for name in &failure_names {
-        failures.push(format!("FAILED: {}", name));
+    let shown = failure_names.len().min(MAX_FAILURES);
+    for name in &failure_names[..shown] {
+        out.push(format!("FAILED: {}", name));
     }
-    out.extend(failures);
-
-    // Add failure details (truncated)
-    if !failure_detail.is_empty() {
-        let detail_lines: Vec<&str> = failure_detail
-            .iter()
-            .map(|s| s.as_str())
-            .filter(|l| {
-                !l.trim().is_empty()
-                    && !l.starts_with("failures:")
-                    && !l.starts_with("test result:")
-            })
-            .take(20)
-            .collect();
-        out.push(String::new());
-        out.extend(detail_lines.iter().map(|l| l.to_string()));
+    if failure_names.len() > MAX_FAILURES {
+        out.push(format!("[+{} more failures]", failure_names.len() - MAX_FAILURES));
     }
 
-    if let Some(s) = summary {
-        out.push(s);
+    for block in failure_blocks.iter().take(MAX_FAILURES) {
+        let chars: Vec<char> = block.chars().collect();
+        if chars.len() > FAILURE_CHAR_CAP {
+            out.push(chars[..FAILURE_CHAR_CAP].iter().collect::<String>() + "…");
+        } else {
+            out.push(block.clone());
+        }
+    }
+
+    let mut agg = AggregatedTestResult::new();
+    let mut any_parsed = false;
+    for s in &summary_lines {
+        if agg.parse_and_merge(s) {
+            any_parsed = true;
+        }
+    }
+    if any_parsed {
+        out.push(agg.format_compact());
+    } else if let Some(s) = summary_lines.last() {
+        out.push(s.clone());
     }
 
     out.join("\n")
@@ -534,9 +617,53 @@ Summary [0.002s] 2 tests run, 0 failed
             "warning: something else [other_lint] [src/b.rs:2]".to_string(),
         ];
         let result = group_clippy_warnings(&warnings);
-        // Should just be prefixed with "  " — no grouping header
         assert_eq!(result.len(), 2);
         assert!(result[0].starts_with("  "));
         assert!(result[1].starts_with("  "));
+    }
+
+    // ── filter_test (compact summary) ───────────────────────────────────────
+
+    #[test]
+    fn test_all_pass_compact_summary() {
+        let output = "\
+running 42 tests
+test foo::bar ... ok
+test foo::baz ... ok
+test result: ok. 42 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 1.23s
+";
+        let result = filter_test(output);
+        assert_eq!(result, "cargo test: 42 passed, 3 ignored (1 suite, 1.23s)");
+    }
+
+    #[test]
+    fn test_all_pass_multi_suite_aggregation() {
+        let output = "\
+running 10 tests
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+running 20 tests
+test result: ok. 20 passed; 0 failed; 2 ignored; 0 measured; 5 filtered out; finished in 1.00s
+";
+        let result = filter_test(output);
+        assert!(result.starts_with("cargo test: 30 passed"), "got: {}", result);
+        assert!(result.contains("2 ignored"), "got: {}", result);
+        assert!(result.contains("5 filtered"), "got: {}", result);
+        assert!(result.contains("2 suites"), "got: {}", result);
+    }
+
+    #[test]
+    fn test_failures_capped_at_10() {
+        let mut lines = Vec::new();
+        lines.push("running 15 tests".to_string());
+        for i in 0..15 {
+            lines.push(format!("test fail_{} ... FAILED", i));
+        }
+        lines.push("test result: FAILED. 0 passed; 15 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s".to_string());
+        let output = lines.join("\n");
+        let result = filter_test(&output);
+        let failed_lines: Vec<&str> = result.lines().filter(|l| l.starts_with("FAILED:")).collect();
+        assert_eq!(failed_lines.len(), 10, "should cap at 10 failures, got: {}", failed_lines.len());
+        assert!(result.contains("[+5 more failures]"), "should show overflow, got: {}", result);
     }
 }

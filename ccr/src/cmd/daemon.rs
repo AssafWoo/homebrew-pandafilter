@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use std::io::{Read, Write};
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -51,6 +51,10 @@ fn process_alive(pid: u32) -> bool {
     ret == 0 || (ret == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
 }
 
+fn daemon_socket_connectable() -> bool {
+    UnixStream::connect(embed_client::socket_path()).is_ok()
+}
+
 fn cleanup_daemon_files() {
     let _ = std::fs::remove_file(embed_client::pid_path());
     let _ = std::fs::remove_file(embed_client::socket_path());
@@ -59,8 +63,19 @@ fn cleanup_daemon_files() {
 fn start() -> Result<()> {
     if let Some(pid) = read_pid() {
         if process_alive(pid) {
-            println!("panda daemon already running (pid {})", pid);
-            return Ok(());
+            if daemon_socket_connectable() {
+                println!("panda daemon already running (pid {})", pid);
+                return Ok(());
+            }
+            // Process alive but socket not ready — may still be starting up.
+            // Wait briefly before concluding it's stale.
+            for _ in 0..6 {
+                std::thread::sleep(Duration::from_millis(500));
+                if daemon_socket_connectable() {
+                    println!("panda daemon already running (pid {})", pid);
+                    return Ok(());
+                }
+            }
         }
         cleanup_daemon_files();
     }
@@ -122,6 +137,7 @@ extern "C" fn sigterm_handler(_sig: libc::c_int) {
 fn daemon_main(sock_path: PathBuf, pid_path: PathBuf) -> Result<()> {
     use std::os::unix::io::AsRawFd;
 
+    panda_core::summarizer::set_daemon_mode();
     ensure_dir(&pid_path);
 
     // Hold an exclusive flock on the PID file for the daemon's lifetime.
@@ -223,7 +239,7 @@ fn daemon_main(sock_path: PathBuf, pid_path: PathBuf) -> Result<()> {
             match listener.accept() {
                 Ok((stream, _)) => {
                     last_request.store(now_secs(), Ordering::Relaxed);
-                    handle_connection(stream);
+                    std::thread::spawn(move || handle_connection(stream));
                 }
                 Err(_) => break,
             }
@@ -373,6 +389,13 @@ fn status() -> Result<()> {
 
     if !process_alive(pid) {
         println!("panda daemon is not running (stale pid file)");
+        cleanup_daemon_files();
+        return Ok(());
+    }
+
+    if !daemon_socket_connectable() {
+        println!("panda daemon is not running (stale socket)");
+        cleanup_daemon_files();
         return Ok(());
     }
 
