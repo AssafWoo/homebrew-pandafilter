@@ -1,0 +1,24 @@
+# Tests python -m ruff dispatch: PythonHandler must delegate to RuffHandler
+# If routing is broken, BERT summarization fires instead of ruff handler,
+# producing much worse compression and potentially losing the error count.
+command_hint = "python -m ruff check ."
+
+[[questions]]
+question = "How many errors did ruff find in total?"
+key_facts = ["64"]
+
+[[questions]]
+question = "What unused import was found on line 12 of jwt.py?"
+key_facts = ["os"]
+
+[[questions]]
+question = "What error code is used for unused imports?"
+key_facts = ["F401"]
+
+[[questions]]
+question = "Which line in routes.py has a variable assigned but never used?"
+key_facts = ["44", "db"]
+
+[[questions]]
+question = "What error code flags comparison to None?"
+key_facts = ["E711"]

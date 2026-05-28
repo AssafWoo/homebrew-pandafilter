@@ -107,8 +107,16 @@ impl Handler for GitHandler {
 // ─── status ──────────────────────────────────────────────────────────────────
 
 fn filter_status(output: &str) -> String {
+    // Detect in-progress git operations from .git/ marker files.
+    // Porcelain output omits this state info, so we source it from the filesystem.
+    let in_progress = crate::handlers::util::detect_git_in_progress(output);
+
     if output.contains("nothing to commit") || output.trim().is_empty() {
-        return "nothing to commit, working tree clean".to_string();
+        let body = "nothing to commit, working tree clean".to_string();
+        return match in_progress {
+            Some(state) => format!("{}\n{}", state.summary(), body),
+            None => body,
+        };
     }
 
     let mut staged: Vec<String> = Vec::new();
@@ -150,7 +158,11 @@ fn filter_status(output: &str) -> String {
     }
 
     if staged.is_empty() && modified.is_empty() && untracked.is_empty() {
-        return "nothing to commit, working tree clean".to_string();
+        let body = "nothing to commit, working tree clean".to_string();
+        return match in_progress {
+            Some(state) => format!("{}\n{}", state.summary(), body),
+            None => body,
+        };
     }
 
     let mut out: Vec<String> = Vec::new();
@@ -183,7 +195,11 @@ fn filter_status(output: &str) -> String {
         out.push(format!("[+{} more untracked]", ut_extra));
     }
 
-    out.join("\n")
+    let body = out.join("\n");
+    match in_progress {
+        Some(state) => format!("{}\n{}", state.summary(), body),
+        None => body,
+    }
 }
 
 // ─── log ─────────────────────────────────────────────────────────────────────

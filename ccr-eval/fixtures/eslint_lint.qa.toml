@@ -1,0 +1,25 @@
+command_hint = "eslint src/"
+
+[[questions]]
+question = "How many total problems did eslint find?"
+key_facts = ["54"]
+
+[[questions]]
+question = "How many errors versus warnings?"
+key_facts = ["39", "15"]
+
+[[questions]]
+question = "What error appears on line 10 of Button.tsx?"
+key_facts = ["React", "JSX", "react-in-jsx-scope"]
+
+[[questions]]
+question = "Which rule fires most frequently across files?"
+key_facts = ["react-in-jsx-scope", "eqeqeq", "no-undef"]
+
+[[questions]]
+question = "What is the issue on line 57 of api.ts?"
+key_facts = ["Promise", "void", "no-floating-promises"]
+
+[[questions]]
+question = "Which files have the 'React must be in scope' error?"
+key_facts = ["Button.tsx", "Modal.tsx", "Dashboard.tsx", "Login.tsx"]

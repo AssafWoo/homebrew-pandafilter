@@ -1,0 +1,25 @@
+command_hint = "mypy src/"
+
+[[questions]]
+question = "How many errors did mypy find?"
+key_facts = ["39"]
+
+[[questions]]
+question = "How many files were checked?"
+key_facts = ["12"]
+
+[[questions]]
+question = "What error is on line 12 of jwt.py?"
+key_facts = ["decode", "bytes", "str", "arg-type"]
+
+[[questions]]
+question = "Which module could not be found on import in routes.py?"
+key_facts = ["flask_jwt"]
+
+[[questions]]
+question = "What is wrong on line 85 of user.py?"
+key_facts = ["split", "None", "union-attr"]
+
+[[questions]]
+question = "Which service file cannot find the stripe module?"
+key_facts = ["payment.py"]

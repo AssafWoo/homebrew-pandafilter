@@ -88,6 +88,11 @@ impl Handler for GrepHandler {
         if !out.iter().any(|a| a == "--with-filename" || a == "-H" || a == "--no-filename" || a == "-h") {
             out.push("--with-filename".to_string());
         }
+        // NUL-separate filename from content to handle filenames containing colons.
+        // Both grep (-Z/--null) and rg (--null) support this.
+        if !out.iter().any(|a| a == "--null" || a == "-Z") {
+            out.push("--null".to_string());
+        }
         out
     }
 
@@ -178,20 +183,30 @@ fn compact_path(path: &str) -> String {
     format!("{}/.../{}", parts[0], parts[parts.len() - 1])
 }
 
-/// Attempt to split "file:linenum:content" or "file:content"
+/// Attempt to split "file\0linenum:content" (NUL-separated) or "file:linenum:content".
+///
+/// Prefers NUL boundary (injected via `--null`) which is unambiguous even for
+/// filenames containing colons (e.g., Windows paths, badly-named files).
 fn split_grep_line(line: &str) -> Option<(String, &str)> {
-    // Try "filename:N:content" (grep -n) or "filename:content"
+    // NUL-separated format: "filename\0lineno:content" or "filename\0content"
+    if let Some(nul_pos) = line.find('\0') {
+        let file = &line[..nul_pos];
+        let rest = &line[nul_pos + 1..];
+        if !file.is_empty() {
+            return Some((file.to_string(), rest));
+        }
+    }
+
+    // Fallback: colon-separated "filename:N:content" or "filename:content"
     let mut colon_positions = line.match_indices(':');
     if let Some((pos1, _)) = colon_positions.next() {
         let candidate_file = &line[..pos1];
-        // If it looks like a path (contains / or . or no spaces)
         if !candidate_file.contains(' ') && !candidate_file.is_empty() {
             let rest = &line[pos1 + 1..];
-            // Skip line number if present
             if let Some((pos2, _)) = rest.match_indices(':').next() {
                 let maybe_num = &rest[..pos2];
                 if maybe_num.chars().all(|c| c.is_ascii_digit()) {
-                    return Some((candidate_file.to_string(), rest)); // preserve "lineno:content"
+                    return Some((candidate_file.to_string(), rest));
                 }
             }
             return Some((candidate_file.to_string(), rest));

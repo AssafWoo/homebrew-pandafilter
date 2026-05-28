@@ -625,6 +625,36 @@ impl SessionState {
     pub fn invalidate_file_cache(&mut self, file_path: &str) {
         self.file_content_cache.remove(file_path);
     }
+
+    /// Returns the set of filenames currently "in focus" for this session.
+    ///
+    /// Focus is determined by two signals (both high-confidence):
+    /// 1. Files with recorded edits (`recent_edits`) — strongest signal.
+    /// 2. Files in the content cache (`file_content_cache`) — agent read them.
+    ///
+    /// Returns bare filenames (not full paths) so that e.g. `src/auth/jwt.rs`
+    /// edited earlier causes `jwt.rs` to surface in build/lint output regardless
+    /// of how the tool output refers to the path.
+    pub fn focused_file_paths(&self) -> Vec<String> {
+        let mut names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for path in self.recent_edits.keys() {
+            if let Some(fname) = std::path::Path::new(path).file_name() {
+                if let Some(s) = fname.to_str() {
+                    names.insert(s.to_string());
+                }
+            }
+        }
+        for path in self.file_content_cache.keys() {
+            if let Some(fname) = std::path::Path::new(path).file_name() {
+                if let Some(s) = fname.to_str() {
+                    names.insert(s.to_string());
+                }
+            }
+        }
+
+        names.into_iter().collect()
+    }
 }
 
 // ── Session digest for pre-compaction capture ─────────────────────────────────

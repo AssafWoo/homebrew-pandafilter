@@ -45,6 +45,86 @@ pub struct FixtureResult {
     pub original_recall: f32,
 }
 
+/// Compression-only result — no Claude API calls required.
+#[derive(Debug)]
+pub struct SavingsResult {
+    pub name: String,
+    pub command_hint: String,
+    pub handler_name: String,
+    pub input_tokens: usize,
+    pub output_tokens: usize,
+    pub savings_pct: f32,
+    pub lines_in: usize,
+    pub lines_out: usize,
+    /// Key facts found in compressed output (grep-based, no LLM).
+    pub facts_found: usize,
+    pub facts_total: usize,
+}
+
+/// Run a fixture through the handler + pipeline and return compression metrics only.
+/// Does not call Claude — safe to run in CI with no API key.
+pub fn run_fixture_savings(txt_path: &Path, qa_path: &Path) -> Result<SavingsResult> {
+    let name = txt_path.file_stem().unwrap().to_string_lossy().into_owned();
+    let input = std::fs::read_to_string(txt_path)?;
+    let qa: QaFixture = toml::from_str(&std::fs::read_to_string(qa_path)?)?;
+
+    // Apply command handler filter (same as run_fixture).
+    let binary = qa.command_hint.split_whitespace().next().unwrap_or(&qa.command_hint);
+    let (handler_output, handler_name) = if !qa.command_hint.is_empty() {
+        if let Some(h) = panda::handlers::get_handler(binary) {
+            let fake_args: Vec<String> = qa.command_hint.split_whitespace().map(|s| s.to_string()).collect();
+            let out = h.filter(&input, &fake_args);
+            let hname = format!("{}", binary);
+            (out, hname)
+        } else {
+            (input.clone(), "(no handler)".to_string())
+        }
+    } else {
+        (input.clone(), "(no hint)".to_string())
+    };
+
+    let config: CcrConfig = toml::from_str(include_str!("../../config/default_filters.toml"))
+        .unwrap_or_default();
+    let pipeline = Pipeline::new(config);
+    let hint = if qa.command_hint.is_empty() { None } else { Some(qa.command_hint.as_str()) };
+    let pipeline_result = pipeline.process(&handler_output, hint, None, None)?;
+    let compressed = &pipeline_result.output;
+
+    let lines_in = input.lines().count();
+    let lines_out = compressed.lines().count();
+    let input_tokens = count_tokens(&input);
+    let output_tokens = count_tokens(compressed);
+    let savings_pct = if input_tokens == 0 { 0.0 } else {
+        (input_tokens.saturating_sub(output_tokens)) as f32 / input_tokens as f32 * 100.0
+    };
+
+    // Grep-based fact check: does each key_fact appear in at least one question's answer?
+    // We use the first key_fact of each question as a representative signal.
+    let compressed_lower = compressed.to_lowercase();
+    let mut facts_found = 0usize;
+    let mut facts_total = 0usize;
+    for q in &qa.questions {
+        // A question "passes" if ANY of its key_facts appears in the compressed output.
+        facts_total += 1;
+        if q.key_facts.iter().any(|f| compressed_lower.contains(&f.to_lowercase())) {
+            facts_found += 1;
+        }
+    }
+
+    Ok(SavingsResult {
+        name,
+        command_hint: qa.command_hint,
+        handler_name,
+        input_tokens,
+        output_tokens,
+        savings_pct,
+        lines_in,
+        lines_out,
+        facts_found,
+        facts_total,
+    })
+}
+
 pub fn discover_fixtures(dir: &Path) -> Result<Vec<(PathBuf, PathBuf)>> {
     let mut pairs = Vec::new();
     let entries = std::fs::read_dir(dir)

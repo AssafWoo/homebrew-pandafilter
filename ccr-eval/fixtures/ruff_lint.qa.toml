@@ -1,0 +1,25 @@
+command_hint = "ruff check ."
+
+[[questions]]
+question = "How many errors did ruff find in total?"
+key_facts = ["64"]
+
+[[questions]]
+question = "How many E711 violations (comparison to None) were found?"
+key_facts = ["E711", "×", "10", "11", "12"]
+
+[[questions]]
+question = "What unused import was found in routes.py?"
+key_facts = ["jsonify", "functools"]
+
+[[questions]]
+question = "What error code flags lines that are too long?"
+key_facts = ["E501"]
+
+[[questions]]
+question = "Which error code means a variable is assigned but never used?"
+key_facts = ["F841"]
+
+[[questions]]
+question = "Does payment.py have any errors?"
+key_facts = ["yes", "payment.py", "F401", "F841", "E501"]

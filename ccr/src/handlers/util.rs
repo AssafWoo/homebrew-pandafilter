@@ -61,12 +61,26 @@ fn filter_pytest(output: &str) -> String {
     let mut out: Vec<String> = Vec::new();
     let mut in_failure = false;
     let mut failure_lines = 0;
+    // Track xfailed/xpassed node IDs separately — cap at 10 each.
+    // XPASSED (unexpected pass) is especially high-signal: it usually means a
+    // previously-broken behaviour was fixed without the team noticing.
+    let mut xfailed: Vec<String> = Vec::new();
+    let mut xpassed: Vec<String> = Vec::new();
 
     for line in &lines {
         let t = line.trim();
         // Keep FAILED/ERROR node IDs
         if t.starts_with("FAILED ") || t.starts_with("ERROR ") {
             out.push(line.to_string());
+            continue;
+        }
+        // Collect XPASSED/XFAILED node IDs (capped at 10 each)
+        if t.starts_with("XPASSED ") && xpassed.len() < 10 {
+            xpassed.push(line.to_string());
+            continue;
+        }
+        if t.starts_with("XFAILED ") && xfailed.len() < 10 {
+            xfailed.push(line.to_string());
             continue;
         }
         // Start of a failure block
@@ -77,11 +91,11 @@ fn filter_pytest(output: &str) -> String {
             continue;
         }
         if in_failure {
-            if failure_lines < 10 {
+            if failure_lines < 3 {
                 out.push(line.to_string());
                 failure_lines += 1;
-            } else if failure_lines == 10 {
-                out.push("[... truncated ...]".to_string());
+            } else if failure_lines == 3 {
+                out.push("     …".to_string());
                 failure_lines += 1;
             }
             // End of failure block
@@ -90,18 +104,32 @@ fn filter_pytest(output: &str) -> String {
             }
             continue;
         }
-        // Summary line
-        if t.contains(" failed") || t.contains(" passed") || t.contains(" error") {
-            if t.starts_with('=') {
-                out.push(line.to_string());
-            }
+        // Summary line — two formats:
+        // Verbose: "====== 1 failed, 45 passed in 12.3s ======"
+        // Quiet (-q): "1 failed, 45 passed in 12.3s" (bare, no === wrapper)
+        let is_summary = (t.contains(" failed") || t.contains(" passed") || t.contains(" error")
+             || t.contains(" xfailed") || t.contains(" xpassed"))
+            && (t.starts_with('=') || t.contains(" in ") || t.ends_with('s'));
+        if is_summary {
+            out.push(line.to_string());
         }
         // Drop: PASSED lines, dots, "collected N items", platform header
     }
-    if out.is_empty() {
+
+    // Surface xpassed first (unexpected passes = most actionable), then xfailed
+    let mut result: Vec<String> = Vec::new();
+    if !xpassed.is_empty() {
+        result.extend(xpassed);
+    }
+    if !xfailed.is_empty() {
+        result.extend(xfailed);
+    }
+    result.extend(out);
+
+    if result.is_empty() {
         output.to_string()
     } else {
-        out.join("\n")
+        result.join("\n")
     }
 }
 
@@ -306,6 +334,99 @@ pub fn mid_git_operation_in(start: &std::path::Path) -> bool {
     }
 }
 
+/// In-progress git operations whose state porcelain output omits.
+///
+/// `git status --porcelain` (which PandaFilter injects) does not print the
+/// state prose git emits for rebases, merges, cherry-picks, etc. This enum
+/// lets `filter_status` surface that info from the `.git/` marker files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitInProgressState {
+    Rebase,
+    MergeConflicts,      // MERGE_HEAD + UU/AA/DD lines present in porcelain
+    MergeReady,          // MERGE_HEAD + no unmerged lines (conflicts resolved)
+    CherryPick,
+    Revert,
+    Bisect,
+    Am,                  // git am session (.git/rebase-apply/applying exists)
+}
+
+impl GitInProgressState {
+    pub fn summary(self) -> &'static str {
+        match self {
+            Self::Rebase         => "rebase in progress",
+            Self::MergeConflicts => "merge in progress. unresolved conflicts",
+            Self::MergeReady     => "merge in progress. no conflicts",
+            Self::CherryPick     => "cherry-pick in progress",
+            Self::Revert         => "revert in progress",
+            Self::Bisect         => "bisect in progress",
+            Self::Am             => "am session in progress",
+        }
+    }
+}
+
+/// Detect an in-progress git operation from the process CWD.
+/// `porcelain_output` is the `--porcelain` output already captured by the hook;
+/// it is used to distinguish merge-with-conflicts from merge-ready-to-commit.
+pub fn detect_git_in_progress(porcelain_output: &str) -> Option<GitInProgressState> {
+    let Ok(cwd) = std::env::current_dir() else { return None };
+    detect_git_in_progress_in(&cwd, porcelain_output)
+}
+
+/// Same as [`detect_git_in_progress`] but walks upward from `start`.
+/// Useful in tests to avoid touching the global CWD.
+pub fn detect_git_in_progress_in(
+    start: &std::path::Path,
+    porcelain_output: &str,
+) -> Option<GitInProgressState> {
+    let mut dir = start.to_path_buf();
+    loop {
+        let git = dir.join(".git");
+        if git.is_dir() {
+            // Cherry-pick takes priority (most actionable for the developer)
+            if git.join("CHERRY_PICK_HEAD").exists() {
+                return Some(GitInProgressState::CherryPick);
+            }
+            if git.join("REVERT_HEAD").exists() {
+                return Some(GitInProgressState::Revert);
+            }
+            // Interactive rebase: .git/rebase-merge/
+            // Non-interactive rebase (also git am): .git/rebase-apply/
+            // Distinguish am from rebase via the presence of "applying" inside.
+            if git.join("rebase-merge").is_dir() {
+                return Some(GitInProgressState::Rebase);
+            }
+            if git.join("rebase-apply").is_dir() {
+                if git.join("rebase-apply/applying").exists() {
+                    return Some(GitInProgressState::Am);
+                }
+                return Some(GitInProgressState::Rebase);
+            }
+            if git.join("BISECT_LOG").exists() {
+                return Some(GitInProgressState::Bisect);
+            }
+            if git.join("MERGE_HEAD").exists() {
+                // Check porcelain output for unmerged status codes (UU, AA, DD)
+                let has_unmerged = porcelain_output.lines().any(|l| {
+                    let b = l.as_bytes();
+                    b.len() >= 2
+                        && (b[0] == b'U'
+                            || (b[0] == b'A' && b[1] == b'A')
+                            || (b[0] == b'D' && b[1] == b'D'))
+                });
+                return Some(if has_unmerged {
+                    GitInProgressState::MergeConflicts
+                } else {
+                    GitInProgressState::MergeReady
+                });
+            }
+            return None;
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
 /// Compact a file path longer than `max_len` chars to "prefix/.../filename".
 pub fn compact_path(path: &str, max_len: usize) -> String {
     if path.len() <= max_len {
@@ -329,6 +450,61 @@ pub fn compact_path(path: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── filter_pytest ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn pytest_xpassed_surfaced_before_failures() {
+        let output = "\
+FAILED tests/auth.py::test_login - AssertionError
+XPASSED tests/auth.py::test_legacy_login
+XFAILED tests/db.py::test_slow_query
+====== 1 failed, 2 xfailed, 1 xpassed in 5.21s ======
+";
+        let result = test_failures(output, "pytest");
+        // xpassed must appear
+        assert!(result.contains("XPASSED"), "xpassed must be surfaced");
+        // xfailed must appear
+        assert!(result.contains("XFAILED"), "xfailed must be surfaced");
+        // FAILED must appear
+        assert!(result.contains("FAILED tests/auth"), "failures must be surfaced");
+        // xpassed must come before failures (highest signal first)
+        let xp_pos = result.find("XPASSED").unwrap();
+        let fail_pos = result.find("FAILED tests/").unwrap();
+        assert!(xp_pos < fail_pos, "xpassed should appear before failures");
+        // summary line preserved
+        assert!(result.contains("1 failed"), "summary must be kept");
+    }
+
+    #[test]
+    fn pytest_xfail_only_run_with_no_failures() {
+        let output = "\
+XFAILED tests/db.py::test_slow_query
+XFAILED tests/db.py::test_timeout
+====== 0 failed, 10 passed, 2 xfailed in 3.1s ======
+";
+        let result = test_failures(output, "pytest");
+        assert!(result.contains("XFAILED"), "xfailed must be kept");
+        assert!(result.contains("2 xfailed"), "summary must mention xfailed");
+        // No line should start with bare "FAILED " (i.e. no test failures, only xfailed)
+        assert!(
+            !result.lines().any(|l| l.trim().starts_with("FAILED ")),
+            "no bare FAILED lines should appear, got:\n{}", result
+        );
+    }
+
+    #[test]
+    fn pytest_xfail_capped_at_10() {
+        // Generate 15 xfailed lines — only 10 should be kept
+        let mut lines: Vec<String> = (0..15)
+            .map(|i| format!("XFAILED tests/test_{}.py::test_fn", i))
+            .collect();
+        lines.push("====== 0 failed, 15 xfailed in 1.0s ======".to_string());
+        let output = lines.join("\n");
+        let result = test_failures(&output, "pytest");
+        let xfail_count = result.lines().filter(|l| l.starts_with("XFAILED")).count();
+        assert!(xfail_count <= 10, "xfailed lines capped at 10, got {}", xfail_count);
+    }
 
     #[test]
     fn mid_git_operation_false_outside_git() {
@@ -470,5 +646,109 @@ mod tests {
         let result = compact_path(p, 25);
         // Should contain filename
         assert!(result.contains("main.rs"));
+    }
+
+    // ── detect_git_in_progress_in ─────────────────────────────────────────────
+
+    fn make_git_dir() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join(".git")).unwrap();
+        tmp
+    }
+
+    #[test]
+    fn detect_cherry_pick() {
+        let tmp = make_git_dir();
+        std::fs::write(tmp.path().join(".git/CHERRY_PICK_HEAD"), "abc\n").unwrap();
+        let state = detect_git_in_progress_in(tmp.path(), "");
+        assert_eq!(state, Some(GitInProgressState::CherryPick));
+    }
+
+    #[test]
+    fn detect_revert() {
+        let tmp = make_git_dir();
+        std::fs::write(tmp.path().join(".git/REVERT_HEAD"), "abc\n").unwrap();
+        let state = detect_git_in_progress_in(tmp.path(), "");
+        assert_eq!(state, Some(GitInProgressState::Revert));
+    }
+
+    #[test]
+    fn detect_rebase_interactive() {
+        let tmp = make_git_dir();
+        std::fs::create_dir(tmp.path().join(".git/rebase-merge")).unwrap();
+        let state = detect_git_in_progress_in(tmp.path(), "");
+        assert_eq!(state, Some(GitInProgressState::Rebase));
+    }
+
+    #[test]
+    fn detect_rebase_non_interactive() {
+        let tmp = make_git_dir();
+        std::fs::create_dir(tmp.path().join(".git/rebase-apply")).unwrap();
+        // No "applying" file → rebase, not am
+        let state = detect_git_in_progress_in(tmp.path(), "");
+        assert_eq!(state, Some(GitInProgressState::Rebase));
+    }
+
+    #[test]
+    fn detect_am_session() {
+        let tmp = make_git_dir();
+        std::fs::create_dir(tmp.path().join(".git/rebase-apply")).unwrap();
+        std::fs::write(tmp.path().join(".git/rebase-apply/applying"), "").unwrap();
+        let state = detect_git_in_progress_in(tmp.path(), "");
+        assert_eq!(state, Some(GitInProgressState::Am));
+    }
+
+    #[test]
+    fn detect_bisect() {
+        let tmp = make_git_dir();
+        std::fs::write(tmp.path().join(".git/BISECT_LOG"), "git bisect start\n").unwrap();
+        let state = detect_git_in_progress_in(tmp.path(), "");
+        assert_eq!(state, Some(GitInProgressState::Bisect));
+    }
+
+    #[test]
+    fn detect_merge_with_conflicts() {
+        let tmp = make_git_dir();
+        std::fs::write(tmp.path().join(".git/MERGE_HEAD"), "abc\n").unwrap();
+        // UU line in porcelain output indicates unmerged file
+        let porcelain = "UU src/main.rs\n";
+        let state = detect_git_in_progress_in(tmp.path(), porcelain);
+        assert_eq!(state, Some(GitInProgressState::MergeConflicts));
+    }
+
+    #[test]
+    fn detect_merge_ready_to_commit() {
+        let tmp = make_git_dir();
+        std::fs::write(tmp.path().join(".git/MERGE_HEAD"), "abc\n").unwrap();
+        // No UU lines — conflicts resolved, ready to commit
+        let porcelain = "M  src/main.rs\n";
+        let state = detect_git_in_progress_in(tmp.path(), porcelain);
+        assert_eq!(state, Some(GitInProgressState::MergeReady));
+    }
+
+    #[test]
+    fn detect_none_clean_repo() {
+        let tmp = make_git_dir();
+        let state = detect_git_in_progress_in(tmp.path(), "");
+        assert_eq!(state, None);
+    }
+
+    #[test]
+    fn detect_none_outside_git() {
+        // A directory with no .git ancestor returns None
+        let tmp = tempfile::tempdir().unwrap();
+        let state = detect_git_in_progress_in(tmp.path(), "");
+        assert_eq!(state, None);
+    }
+
+    #[test]
+    fn state_summaries_correct() {
+        assert_eq!(GitInProgressState::Rebase.summary(), "rebase in progress");
+        assert_eq!(GitInProgressState::MergeConflicts.summary(), "merge in progress. unresolved conflicts");
+        assert_eq!(GitInProgressState::MergeReady.summary(), "merge in progress. no conflicts");
+        assert_eq!(GitInProgressState::CherryPick.summary(), "cherry-pick in progress");
+        assert_eq!(GitInProgressState::Revert.summary(), "revert in progress");
+        assert_eq!(GitInProgressState::Bisect.summary(), "bisect in progress");
+        assert_eq!(GitInProgressState::Am.summary(), "am session in progress");
     }
 }

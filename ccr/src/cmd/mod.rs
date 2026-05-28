@@ -13,5 +13,6 @@ pub mod proxy;
 pub mod read_cmd;
 pub mod rewrite;
 pub mod run;
+pub mod trust;
 pub mod update;
 pub mod verify;

@@ -188,10 +188,13 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         return Ok(None);
     }
 
-    // Skip the entire pipeline (including BERT) for trivially small outputs.
-    // Commands like `which`, `mkdir`, `wc` produce <15 tokens — nothing to compress.
-    const MIN_PIPELINE_TOKENS: usize = 15;
-    if panda_core::tokens::count_tokens(&output_text) < MIN_PIPELINE_TOKENS {
+    // Skip the entire pipeline for small outputs. Under 500 chars (~125 tokens),
+    // handler + BERT overhead can exceed any compression benefit — particularly on
+    // already-concise commands like `git log --oneline`, `go list`, `wc`.
+    // Benchmark feedback: single-command runs on compact Opus output went negative;
+    // this threshold prevents that regression.
+    const BYPASS_CHARS: usize = 500;
+    if output_text.len() < BYPASS_CHARS {
         return Ok(None);
     }
 
@@ -225,15 +228,21 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
             .map(|s| s.to_string())
     });
 
+    // Clean-room mode: PANDA_CLEAN_ROOM=1 bypasses all learned state (noise
+    // store, result cache, session dedup, cross-command dedup) so the pipeline
+    // can be evaluated fairly on a new repo without 1,800 learned patterns
+    // interfering. Patterns are NOT deleted — just ignored for this invocation.
+    let clean_room = std::env::var("PANDA_CLEAN_ROOM").as_deref() == Ok("1");
+
     let sid = crate::session::session_id();
     let mut session = crate::session::SessionState::load(&sid);
 
     // RC: result cache — return byte-identical output on hit (prompt cache stability)
     let rc_key = crate::result_cache::ResultCache::compute_key(&output_text, command_hint.as_deref());
-    {
-        let mut rc = crate::result_cache::ResultCache::load(&sid);
-        rc.evict_old();
-        if let Some(entry) = rc.lookup(&rc_key) {
+    if !clean_room {
+    let mut rc = crate::result_cache::ResultCache::load(&sid);
+    rc.evict_old();
+    if let Some(entry) = rc.lookup(&rc_key) {
             let cached_output = entry.output.clone();
             let analytics = panda_core::analytics::Analytics::new_cache_hit(
                 entry.input_tokens,
@@ -272,7 +281,8 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     // timestamp-stripped version of the output and check similarity at a
     // lower threshold (0.80 vs 0.92).  Catches polling loops where only
     // clocks/counters/UUIDs differ between otherwise identical responses.
-    if session.has_recent_entry(&cmd_key, 120) && crate::bert_budget::try_consume() {
+    // Skipped in clean-room mode — session history is not consulted.
+    if !clean_room && session.has_recent_entry(&cmd_key, 120) && crate::bert_budget::try_consume() {
         let normalized = strip_temporal_noise(&output_text);
         if let Ok(mut embs) = panda_core::summarizer::embed_batch(&[normalized.as_str()]) {
             if let Some(emb) = embs.pop() {
@@ -293,28 +303,35 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         }
     }
 
-    let historical_centroid = session.command_centroid(&cmd_key).cloned();
+    // In clean-room mode, ignore all session-derived pressure so the pipeline
+    // uses only the raw config pressure (no learned stale-context boosting).
+    let historical_centroid = if clean_room { None } else { session.command_centroid(&cmd_key).cloned() };
 
-    // Adaptive pressure: if the same command has been producing near-identical output
-    // (high centroid_delta similarity), it's stale context — compress it more.
-    // Similarity < 0.85 → no modifier (content is novel).
-    // Similarity 0.85→1.0 → linearly maps to modifier 0.0→0.32 (capped).
-    let stability_pressure = session
-        .last_centroid_delta(&cmd_key)
-        .map(stability_to_pressure)
-        .unwrap_or(0.0);
-    // Staleness pressure: state-command outputs, pre-edit builds, edited-file reads.
-    // Capped at 0.3 so it cannot dominate the total pressure.
-    let staleness_pressure = session.staleness_pressure();
+    let stability_pressure = if clean_room {
+        0.0
+    } else {
+        // Adaptive pressure: if the same command has been producing near-identical output
+        // (high centroid_delta similarity), it's stale context — compress it more.
+        session
+            .last_centroid_delta(&cmd_key)
+            .map(stability_to_pressure)
+            .unwrap_or(0.0)
+    };
+    let staleness_pressure = if clean_room { 0.0 } else { session.staleness_pressure() };
     let pressure =
         (session.context_pressure() + stability_pressure + staleness_pressure).min(1.0);
     panda_core::zoom::enable();
 
     // NL: apply pre-filter to remove lines promoted as permanent noise.
+    // Skipped in clean-room mode so learned patterns don't affect evaluation.
     let project_key = crate::util::project_key();
-    let noise_store = project_key
-        .as_ref()
-        .map(|k| crate::noise_learner::NoiseStore::load(k));
+    let noise_store = if clean_room {
+        None
+    } else {
+        project_key
+            .as_ref()
+            .map(|k| crate::noise_learner::NoiseStore::load(k))
+    };
 
     let raw_lines: Vec<&str> = output_text.lines().collect();
     let filtered_text: String = if let Some(ref store) = noise_store {
@@ -340,12 +357,15 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     };
 
     // NL: record what the pipeline suppressed so we can learn project noise.
-    if let (Some(ref key), Some(mut store)) = (&project_key, noise_store) {
-        let output_lines: Vec<&str> = result.output.lines().collect();
-        store.record_lines(&raw_lines, &output_lines);
-        store.promote_eligible();
-        store.evict_stale(now_secs());
-        store.save(key);
+    // Skipped in clean-room mode — we don't want evaluation runs to poison the model.
+    if !clean_room {
+        if let (Some(ref key), Some(mut store)) = (&project_key, noise_store) {
+            let output_lines: Vec<&str> = result.output.lines().collect();
+            store.record_lines(&raw_lines, &output_lines);
+            store.promote_eligible();
+            store.evict_stale(now_secs());
+            store.save(key);
+        }
     }
 
     // Enrich zoom block labels with content-derived categories before persisting.
@@ -377,10 +397,11 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     // ── Session-aware passes ──────────────────────────────────────────────────
     // Skip BERT-based passes for short outputs: semantic compression and dedup
     // add latency without meaningful benefit when there are few lines to work with.
+    // All session passes are also skipped in clean-room mode.
     const BERT_MIN_LINES: usize = 15;
     let pipeline_line_count = result.output.lines().count();
 
-    let pipeline_emb = if pipeline_line_count >= BERT_MIN_LINES && crate::bert_budget::try_consume() {
+    let pipeline_emb = if !clean_room && pipeline_line_count >= BERT_MIN_LINES && crate::bert_budget::try_consume() {
         panda_core::summarizer::embed_batch(&[result.output.as_str()])
             .ok()
             .and_then(|mut v| v.pop())
@@ -398,7 +419,11 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         result.output.clone()
     };
 
-    let after_dedup = apply_sentence_dedup(&output_after_delta, &cmd_key, &session);
+    let after_dedup = if clean_room {
+        output_after_delta.clone()
+    } else {
+        apply_sentence_dedup(&output_after_delta, &cmd_key, &session)
+    };
 
     // Determine is_state early so cross-command dedup can respect the guard.
     let is_state = {
@@ -411,7 +436,11 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         }
     };
 
-    let after_xdedup = cross_command_dedup(&after_dedup, &cmd_key, &session, &sid, is_state);
+    let after_xdedup = if clean_room {
+        after_dedup
+    } else {
+        cross_command_dedup(&after_dedup, &cmd_key, &session, &sid, is_state)
+    };
 
     // Save any new zoom blocks registered during cross-command dedup.
     let xdedup_blocks = panda_core::zoom::drain();
@@ -419,8 +448,8 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         let _ = crate::zoom_store::save_blocks(&sid, xdedup_blocks);
     }
 
-    let compression_factor = session.compression_factor();
-    let centroid_for_c2 = session.command_centroid(&cmd_key).cloned();
+    let compression_factor = if clean_room { 1.0 } else { session.compression_factor() };
+    let centroid_for_c2 = if clean_room { None } else { session.command_centroid(&cmd_key).cloned() };
     let mut final_output = if compression_factor < 0.90 && pipeline_line_count >= BERT_MIN_LINES {
         let line_count = after_xdedup.lines().count();
         let reduced_budget = ((line_count as f32 * compression_factor) as usize).max(10);
@@ -434,7 +463,9 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         after_xdedup
     };
 
-    if pipeline_line_count >= BERT_MIN_LINES && crate::bert_budget::try_consume() {
+    // Session update: record embeddings/centroid/errors for next-turn dedup.
+    // Skipped in clean-room mode — evaluation runs must not pollute session state.
+    if !clean_room && pipeline_line_count >= BERT_MIN_LINES && crate::bert_budget::try_consume() {
         let non_empty: Vec<&str> = final_output
             .lines()
             .filter(|l| !l.trim().is_empty())
@@ -465,6 +496,11 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         );
     }
 
+    // ── Focus boost ───────────────────────────────────────────────────────────
+    // Reorder lines so content about actively-edited/read files appears first.
+    // Runs after all handler/BERT compression so it operates on the final text.
+    final_output = apply_focus_boost(&final_output, &session, clean_room);
+
     // Record analytics: use pipeline output tokens (pre-BERT) for input — accurate
     // enough and avoids a BERT dependency for analytics correctness.
     let input_tokens = panda_core::tokens::count_tokens(&output_text);
@@ -478,13 +514,61 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     let analytics = panda_core::analytics::Analytics::new(
         input_tokens,
         output_tokens,
-        command_hint,
+        command_hint.clone(),
         subcommand,
         None,
     );
     crate::util::append_analytics(&analytics);
 
-    {
+    // ── Tee file + overflow hint ────────────────────────────────────────────────
+    // Write the raw (pre-compression) output to a tee file so the agent can
+    // retrieve full context when needed. Append a recovery hint when compression
+    // is aggressive (>60% savings), so the agent knows where to look.
+    let tee_path = write_hook_tee(&cmd_key, &output_text);
+    let input_chars = output_text.len();
+    let output_chars = final_output.len();
+    let savings_pct = 100usize.saturating_sub(output_chars.saturating_mul(100) / input_chars.max(1));
+
+    if savings_pct > 60 {
+        if let Some(ref path) = tee_path {
+            final_output.push_str(&format!("\n[full output: {}]", path.display()));
+        }
+    }
+
+    // ── Transparency header ───────────────────────────────────────────────────
+    // Prepend a single-line comment showing what happened. Lets the agent (and
+    // the developer inspecting traces) see which handler fired and how much was
+    // removed.
+    //
+    // Only added when compression exceeds MIN_HEADER_SAVINGS_PCT (15%). Below
+    // that threshold the ~55-char header consumes more than the compression saved,
+    // producing a net-negative result (confirmed by benchmark: Build category −3.0%).
+    //
+    // Added BEFORE the cache insert so the cache stores the header-inclusive bytes,
+    // ensuring cache-hit responses are byte-identical to first-run responses.
+    const MIN_HEADER_SAVINGS_PCT: usize = 15;
+    if output_chars < input_chars && savings_pct >= MIN_HEADER_SAVINGS_PCT {
+        let ratio_pct = 100 - savings_pct;
+        let handler_label = command_hint.as_deref().unwrap_or("generic");
+        let header = format!(
+            "# panda: {} → {} chars ({} handler; {}% retained)\n",
+            input_chars, output_chars, handler_label, ratio_pct
+        );
+        final_output = format!("{}{}", header, final_output);
+    }
+
+    // ── Trust warnings ────────────────────────────────────────────────────────
+    // If load_user_filters() found an untrusted project filter file, it pushed
+    // a warning into filter_trust::PENDING_WARNINGS. Drain and prepend here so
+    // the LLM sees the security notice in its tool output.
+    let trust_warnings = crate::filter_trust::take_warnings();
+    if !trust_warnings.is_empty() {
+        let warning_block = trust_warnings.join("\n");
+        final_output = format!("{}\n{}", warning_block, final_output);
+    }
+
+    // Result cache insert — skipped in clean-room mode.
+    if !clean_room {
         let mut rc = crate::result_cache::ResultCache::load(&sid);
         rc.insert(rc_key, final_output.clone(), input_tokens, output_tokens);
         rc.save(&sid);
@@ -737,6 +821,51 @@ fn process_read(hook_input: HookInput) -> Result<Option<String>> {
     let mut session = crate::session::SessionState::load(&sid);
     let historical_centroid = session.command_centroid(&file_path).cloned();
     let pressure = session.context_pressure();
+
+    // ── Edit-aware re-read: show only edited regions + context ────────────────
+    // If the session has edit records for this file AND it's a re-read (file was
+    // already in the session's command centroids — i.e. we've seen it before),
+    // send just the edited sections instead of the full file.
+    // Skipped for short files (<80 lines) where full content is cheap.
+    if line_count >= 80 && historical_centroid.is_some() {
+        let edit_ranges = session.edit_preserve_ranges(&file_path, 5);
+        if !edit_ranges.is_empty() {
+            let lines: Vec<&str> = output_text.lines().collect();
+            let mut out_lines: Vec<String> = Vec::new();
+            let mut last_end = 0usize;
+            for (start, end) in &edit_ranges {
+                let from = start.saturating_sub(1); // convert to 0-indexed
+                let to = (*end).min(lines.len());
+                if from > last_end + 1 {
+                    out_lines.push(format!("[... {} lines ...]", from - last_end));
+                }
+                for (i, line) in lines[from..to].iter().enumerate() {
+                    out_lines.push(format!("{}\t{}", from + i + 1, line));
+                }
+                last_end = to;
+            }
+            if last_end < lines.len() {
+                out_lines.push(format!("[... {} lines ...]", lines.len() - last_end));
+            }
+            out_lines.push(format!(
+                "[{} lines total, showing {} edited region(s) + context]",
+                lines.len(),
+                edit_ranges.len()
+            ));
+
+            let output = out_lines.join("\n");
+            let in_tok = panda_core::tokens::count_tokens(&output_text);
+            let out_tok = panda_core::tokens::count_tokens(&output);
+            crate::util::append_analytics(&panda_core::analytics::Analytics::new(
+                in_tok,
+                out_tok,
+                Some("(read-edit-ranges)".to_string()),
+                None,
+                None,
+            ));
+            return Ok(Some(serde_json::to_string(&HookOutput { output })?));
+        }
+    }
 
     // Focus-aware compression: replaces head/tail for large code files when focus is active
     if line_count >= 150 {
@@ -1431,6 +1560,103 @@ fn refresh_focus_embedding(file_path: &str) {
 }
 
 // ── Adaptive pressure helper (Feature 2) ─────────────────────────────────────
+
+/// Write raw command output to a tee file for recovery when compression is aggressive.
+/// Returns the path if successful.
+fn write_hook_tee(cmd: &str, content: &str) -> Option<std::path::PathBuf> {
+    // Only tee if content is substantial (>1KB)
+    if content.len() < 1024 {
+        return None;
+    }
+    let tee_dir = dirs::data_local_dir()?.join("panda").join("tee");
+    std::fs::create_dir_all(&tee_dir).ok()?;
+
+    // Auto-rotate: keep max 50 tee files
+    if let Ok(entries) = std::fs::read_dir(&tee_dir) {
+        let mut files: Vec<std::path::PathBuf> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("log"))
+            .collect();
+        if files.len() > 50 {
+            files.sort();
+            for old in files.iter().take(files.len() - 50) {
+                let _ = std::fs::remove_file(old);
+            }
+        }
+    }
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let safe_cmd: String = cmd
+        .chars()
+        .take(30)
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let path = tee_dir.join(format!("{}_{}.log", ts, safe_cmd));
+    std::fs::write(&path, content).ok()?;
+    Some(path)
+}
+
+/// Reorder output lines to surface lines mentioning focused files first.
+///
+/// After the handler compresses output, diagnostic lines about files the agent
+/// is actively editing/reading are most valuable — they should appear before
+/// noise from unrelated files. This function:
+///   1. Partitions lines into "focused" (mention a focused filename) vs "other".
+///   2. Returns focused lines first, then up to `cap` other lines.
+///   3. Appends a summary if other lines were truncated.
+///
+/// No-ops when: clean_room mode, no focused files in session, or no focused
+/// lines appear in output (avoids reordering unrelated output).
+fn apply_focus_boost(
+    output: &str,
+    session: &crate::session::SessionState,
+    clean_room: bool,
+) -> String {
+    if clean_room {
+        return output.to_string();
+    }
+    let focused = session.focused_file_paths();
+    if focused.is_empty() {
+        return output.to_string();
+    }
+
+    let mut focused_lines: Vec<&str> = Vec::new();
+    let mut other_lines: Vec<&str> = Vec::new();
+
+    for line in output.lines() {
+        if focused.iter().any(|f| line.contains(f.as_str())) {
+            focused_lines.push(line);
+        } else {
+            other_lines.push(line);
+        }
+    }
+
+    // If nothing matches focus, pass through unchanged — don't reorder unrelated output.
+    if focused_lines.is_empty() {
+        return output.to_string();
+    }
+
+    // Cap how many "other" lines we include so focused content stays prominent.
+    const OTHER_CAP: usize = 30;
+    let cap = OTHER_CAP.saturating_sub(focused_lines.len());
+    let extra = other_lines.len().saturating_sub(cap);
+
+    let mut result = focused_lines.join("\n");
+    if !other_lines.is_empty() {
+        let shown: Vec<&str> = other_lines.iter().copied().take(cap).collect();
+        if !shown.is_empty() {
+            result.push('\n');
+            result.push_str(&shown.join("\n"));
+        }
+        if extra > 0 {
+            result.push_str(&format!("\n[+{} lines from non-focused files]", extra));
+        }
+    }
+    result
+}
 
 /// Convert centroid similarity to an additive pressure modifier.
 /// Similarity < 0.85 → 0 (novel content, no extra pressure).

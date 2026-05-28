@@ -1,0 +1,67 @@
+src/auth/jwt.py:12:1: F401 `os` imported but unused
+src/auth/jwt.py:45:9: E711 Comparison to `None` (use "is" or "is not")
+src/auth/jwt.py:67:5: W291 Trailing whitespace
+src/auth/jwt.py:89:1: E302 Expected 2 blank lines, found 1
+src/auth/jwt.py:112:13: F841 Local variable `token` is assigned to but never used
+src/auth/jwt.py:134:80: E501 Line too long (92 > 88 characters)
+src/auth/jwt.py:156:5: E711 Comparison to `None` (use "is" or "is not")
+src/auth/jwt.py:178:1: W391 Blank line at end of file
+src/models/user.py:5:1: F401 `datetime` imported but unused
+src/models/user.py:8:1: F401 `typing.Optional` imported but unused
+src/models/user.py:23:9: E711 Comparison to `None` (use "is" or "is not")
+src/models/user.py:34:5: F841 Local variable `cursor` is assigned to but never used
+src/models/user.py:56:80: E501 Line too long (105 > 88 characters)
+src/models/user.py:78:1: E302 Expected 2 blank lines, found 1
+src/models/user.py:91:13: W293 Whitespace before comment
+src/models/user.py:102:9: E711 Comparison to `None` (use "is" or "is not")
+src/models/user.py:115:1: F401 `hashlib` imported but unused
+src/api/routes.py:3:1: F401 `flask.jsonify` imported but unused
+src/api/routes.py:7:1: F401 `functools.wraps` imported but unused
+src/api/routes.py:29:5: E302 Expected 2 blank lines, found 1
+src/api/routes.py:44:9: F841 Local variable `db` is assigned to but never used
+src/api/routes.py:67:80: E501 Line too long (98 > 88 characters)
+src/api/routes.py:83:13: E711 Comparison to `None` (use "is" or "is not")
+src/api/routes.py:101:9: W291 Trailing whitespace
+src/api/routes.py:118:5: F841 Local variable `result` is assigned to but never used
+src/api/routes.py:136:1: W391 Blank line at end of file
+src/services/auth_service.py:2:1: F401 `time` imported but unused
+src/services/auth_service.py:19:5: E302 Expected 2 blank lines, found 1
+src/services/auth_service.py:33:13: E711 Comparison to `None` (use "is" or "is not")
+src/services/auth_service.py:47:80: E501 Line too long (91 > 88 characters)
+src/services/auth_service.py:61:9: F841 Local variable `payload` is assigned to but never used
+src/services/auth_service.py:75:5: W291 Trailing whitespace
+src/services/auth_service.py:89:1: E302 Expected 2 blank lines, found 1
+src/services/auth_service.py:103:13: E711 Comparison to `None` (use "is" or "is not")
+src/services/payment.py:4:1: F401 `decimal.Decimal` imported but unused
+src/services/payment.py:11:1: F401 `logging` imported but unused
+src/services/payment.py:28:9: E711 Comparison to `None` (use "is" or "is not")
+src/services/payment.py:42:5: F841 Local variable `charge` is assigned to but never used
+src/services/payment.py:58:80: E501 Line too long (104 > 88 characters)
+src/services/payment.py:71:1: E302 Expected 2 blank lines, found 1
+src/services/payment.py:85:13: W291 Trailing whitespace
+src/services/payment.py:99:9: E711 Comparison to `None` (use "is" or "is not")
+src/services/payment.py:113:5: F841 Local variable `response` is assigned to but never used
+src/utils/helpers.py:1:1: F401 `re` imported but unused
+src/utils/helpers.py:3:1: F401 `json` imported but unused
+src/utils/helpers.py:15:5: E302 Expected 2 blank lines, found 1
+src/utils/helpers.py:29:13: E711 Comparison to `None` (use "is" or "is not")
+src/utils/helpers.py:43:80: E501 Line too long (89 > 88 characters)
+src/utils/helpers.py:57:9: W291 Trailing whitespace
+src/utils/helpers.py:71:5: F841 Local variable `cache` is assigned to but never used
+src/utils/helpers.py:83:1: E302 Expected 2 blank lines, found 1
+src/utils/helpers.py:95:13: E711 Comparison to `None` (use "is" or "is not")
+src/utils/helpers.py:109:1: W391 Blank line at end of file
+tests/test_auth.py:8:1: F401 `pytest` imported but unused
+tests/test_auth.py:23:5: E302 Expected 2 blank lines, found 1
+tests/test_auth.py:37:9: F841 Local variable `mock_user` is assigned to but never used
+tests/test_auth.py:51:80: E501 Line too long (93 > 88 characters)
+tests/test_auth.py:65:13: E711 Comparison to `None` (use "is" or "is not")
+tests/test_auth.py:79:5: W291 Trailing whitespace
+tests/test_auth.py:93:9: F841 Local variable `token_data` is assigned to but never used
+tests/test_models.py:5:1: F401 `unittest.mock` imported but unused
+tests/test_models.py:19:5: E302 Expected 2 blank lines, found 1
+tests/test_models.py:33:13: E711 Comparison to `None` (use "is" or "is not")
+tests/test_models.py:47:80: E501 Line too long (97 > 88 characters)
+tests/test_models.py:61:9: F841 Local variable `session` is assigned to but never used
+tests/test_models.py:75:5: W291 Trailing whitespace
+Found 64 errors.

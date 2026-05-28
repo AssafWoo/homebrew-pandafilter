@@ -1,0 +1,22 @@
+# Tests pip list --format=json parsing
+command_hint = "pip list"
+
+[[questions]]
+question = "What version of flask is installed?"
+key_facts = ["3.0.2"]
+
+[[questions]]
+question = "What version of numpy is installed?"
+key_facts = ["1.26.4"]
+
+[[questions]]
+question = "Is pytest installed?"
+key_facts = ["pytest", "8.0.2"]
+
+[[questions]]
+question = "How many packages are installed in total?"
+key_facts = ["57"]
+
+[[questions]]
+question = "What version of requests is installed?"
+key_facts = ["2.31.0"]

@@ -26,6 +26,7 @@ mod analytics_db;
 mod bert_budget;
 mod cmd;
 mod error_signatures;
+mod filter_trust;
 mod staleness;
 mod config_loader;
 mod handlers;
@@ -156,6 +157,10 @@ enum Commands {
         /// Clear all learned patterns for this project
         #[arg(long)]
         reset: bool,
+        /// Print instructions for enabling clean-room mode (bypasses all learned state
+        /// temporarily without deleting patterns — useful for fair benchmarking)
+        #[arg(long)]
+        clean_room: bool,
     },
     /// Apply read filtering to a file (diagnostic — shows token savings)
     ReadFile {
@@ -167,6 +172,10 @@ enum Commands {
     },
     /// Check integrity of installed PandaFilter hook scripts
     Verify,
+    /// Review and trust project-local filter rules in .panda/filters.toml
+    Trust,
+    /// Revoke trust for project-local filter rules in .panda/filters.toml
+    Untrust,
     /// Update PandaFilter (use `brew upgrade assafwoo/pandafilter/ccr` instead)
     Update,
     /// Compress a conversation JSON to reduce token count
@@ -254,9 +263,11 @@ fn main() {
         Commands::Proxy { args } => cmd::proxy::run(args),
         Commands::Discover => cmd::discover::run(),
         Commands::Expand { id, list } => cmd::expand::run(id.as_deref().unwrap_or(""), list),
-        Commands::Noise { reset } => cmd::noise::run(reset),
+        Commands::Noise { reset, clean_room } => cmd::noise::run(reset, clean_room),
         Commands::ReadFile { file, level } => cmd::read_cmd::run(&file, &level),
         Commands::Verify => cmd::verify::run(),
+        Commands::Trust => cmd::trust::run_trust(),
+        Commands::Untrust => cmd::trust::run_untrust(),
         Commands::Update => {
             // Detect the bad-keg migration case: older installs stored the keg
             // as version "64" (inferred from "arm64" in the asset URL). brew upgrade
