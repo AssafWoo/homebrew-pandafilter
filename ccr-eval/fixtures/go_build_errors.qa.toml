@@ -1,4 +1,4 @@
-command_hint = "go"
+command_hint = "go build"
 
 [[questions]]
 question = "Which file and line number has the 'undefined: UserRepository' error?"

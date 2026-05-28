@@ -1,0 +1,17 @@
+command_hint = "npm outdated"
+
+[[questions]]
+question = "How many packages are outdated?"
+key_facts = ["12", "11", "10"]
+
+[[questions]]
+question = "What version is eslint currently on and what is the latest?"
+key_facts = ["7.32.0", "8.56.0"]
+
+[[questions]]
+question = "What major version upgrade is available for next?"
+key_facts = ["14", "13 to 14"]
+
+[[questions]]
+question = "Is typescript outdated?"
+key_facts = ["yes", "4.9.5", "5.3.3"]

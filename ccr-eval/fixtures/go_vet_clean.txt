@@ -1,0 +1,5 @@
+# github.com/user/repo/internal/server
+# github.com/user/repo/internal/handler
+# github.com/user/repo/internal/middleware
+# github.com/user/repo/pkg/auth
+# github.com/user/repo/cmd/api

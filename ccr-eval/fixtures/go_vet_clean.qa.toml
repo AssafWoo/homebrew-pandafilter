@@ -1,0 +1,9 @@
+command_hint = "go vet"
+
+[[questions]]
+question = "Did go vet find any issues?"
+key_facts = ["ok", "no", "clean", "0"]
+
+[[questions]]
+question = "Was the vet check successful?"
+key_facts = ["ok", "success", "clean"]

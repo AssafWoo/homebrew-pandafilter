@@ -47,9 +47,9 @@ impl Handler for NpmHandler {
         match subcmd {
             "install" | "i" | "add" | "ci" => filter_install(output),
             "test" | "t" => filter_test(output),
-            "run" | "run-script" => {
-                filter_run_script(output)
-            }
+            "run" | "run-script" => filter_run_script(output),
+            "audit" => filter_audit(output),
+            "outdated" => filter_outdated(output),
             _ => output.to_string(),
         }
     }
@@ -376,6 +376,172 @@ fn filter_lint_passthrough(output: &str) -> String {
     result
 }
 
+/// Filter `npm audit` output into a severity-grouped summary.
+///
+/// - No vulnerabilities → "[no vulnerabilities found]"
+/// - Otherwise: extract the summary line + list affected packages with severity
+fn filter_audit(output: &str) -> String {
+    let t = output.trim();
+
+    // Zero vulnerabilities: "found 0 vulnerabilities" or "0 vulnerabilities found"
+    if t.contains("0 vulnerabilities") || t.contains("found 0 vulnerabilities") {
+        return "[no vulnerabilities found]".to_string();
+    }
+
+    // Extract the footer summary line ("N vulnerabilities (X low, Y moderate, Z critical)")
+    let summary = output.lines().rev().find(|l| {
+        let t = l.trim();
+        t.contains("vulnerabilit") && (t.contains("critical") || t.contains("high") || t.contains("moderate") || t.contains("low") || t.contains("found"))
+    }).map(|l| l.trim().to_string());
+
+    // Collect vulnerability entries: lines like "Severity: critical" preceded by a package name
+    let lines: Vec<&str> = output.lines().collect();
+    let mut packages: Vec<String> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim();
+        if t.starts_with("Severity:") {
+            let severity = t.trim_start_matches("Severity:").trim();
+            // The package name is usually 1-2 lines above the Severity: line
+            let pkg_line = lines[..i].iter().rev()
+                .find(|l| {
+                    let lt = l.trim();
+                    !lt.is_empty()
+                        && !lt.starts_with("npm")
+                        && !lt.starts_with('#')
+                        && !lt.starts_with("Depends on")
+                        && !lt.starts_with("fix available")
+                        && !lt.starts_with("node_modules")
+                })
+                .map(|l| l.trim())
+                .unwrap_or("unknown");
+            // Trim version range suffix (e.g. "lodash  <=4.17.20" → "lodash")
+            let pkg_name = pkg_line.split_whitespace().next().unwrap_or(pkg_line);
+            if packages.len() < 15 {
+                packages.push(format!("{} ({})", pkg_name, severity));
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    if let Some(s) = summary {
+        out.push(s);
+    }
+    if !packages.is_empty() {
+        out.push(packages.join(", "));
+    }
+
+    if out.is_empty() {
+        // Couldn't parse — trim boilerplate and return a compact version
+        let cleaned: Vec<&str> = output.lines()
+            .filter(|l| {
+                let t = l.trim();
+                !t.is_empty() && !t.starts_with("npm audit report") && !t.starts_with("node_modules")
+            })
+            .take(20)
+            .collect();
+        return if cleaned.is_empty() { output.to_string() } else { cleaned.join("\n") };
+    }
+    out.join("\n")
+}
+
+/// Filter `npm outdated` output.
+///
+/// - Empty output → "[all packages up to date]"
+/// - Otherwise: group into major vs minor upgrades, emit compact lines
+fn filter_outdated(output: &str) -> String {
+    if output.trim().is_empty() {
+        return "[all packages up to date]".to_string();
+    }
+
+    let lines: Vec<&str> = output.lines().collect();
+    // Find header line to determine column positions
+    let header_idx = lines.iter().position(|l| {
+        let t = l.trim();
+        t.starts_with("Package") && t.contains("Current") && t.contains("Latest")
+    });
+
+    // Each entry: (package_name, current_version, latest_version)
+    let mut entries: Vec<(String, String, String)> = Vec::new();
+
+    if let Some(hi) = header_idx {
+        let header = lines[hi];
+        let current_col = header.find("Current").unwrap_or(20);
+        let latest_col = header.find("Latest").unwrap_or(40);
+
+        for line in &lines[hi + 1..] {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let len = line.len();
+            if len < 3 {
+                continue;
+            }
+            let pkg = line[..current_col.min(len)].trim().to_string();
+            let current = if current_col < len {
+                let s = &line[current_col..latest_col.min(len)];
+                s.split_whitespace().next().unwrap_or("").to_string()
+            } else { continue };
+            let latest = if latest_col < len {
+                let s = &line[latest_col..];
+                s.split_whitespace().next().unwrap_or("").to_string()
+            } else { continue };
+
+            if pkg.is_empty() || current.is_empty() || latest.is_empty() {
+                continue;
+            }
+            if entries.len() < 40 {
+                entries.push((pkg, current, latest));
+            }
+        }
+    } else {
+        // No recognized header — compact: keep non-empty lines, cap at 20
+        let compact: Vec<&str> = lines.iter()
+            .filter(|l| !l.trim().is_empty())
+            .take(20)
+            .copied()
+            .collect();
+        return format!("[{} packages outdated]\n{}", compact.len(), compact.join("\n"));
+    }
+
+    if entries.is_empty() {
+        return "[all packages up to date]".to_string();
+    }
+
+    // Group by major version bump vs minor/patch
+    let mut major: Vec<String> = Vec::new();
+    let mut minor: Vec<String> = Vec::new();
+
+    for (pkg, current, latest) in &entries {
+        let cur_major = current.split('.').next().unwrap_or("0");
+        let lat_major = latest.split('.').next().unwrap_or("0");
+        let is_major = cur_major != lat_major;
+
+        // Short display: pkg current→latest
+        let display = format!("{} {}→{}", pkg, current, latest);
+        if is_major {
+            major.push(display);
+        } else {
+            minor.push(display);
+        }
+    }
+
+    let mut out = vec![format!("[{} packages outdated]", entries.len())];
+    if !major.is_empty() {
+        out.push(format!("Major: {}", major.join(", ")));
+    }
+    if !minor.is_empty() {
+        // Compact minor: just list package names with brief version bump
+        let minor_compact: Vec<String> = minor.iter().take(15).cloned().collect();
+        let extra = minor.len().saturating_sub(15);
+        let mut s = format!("Minor: {}", minor_compact.join(", "));
+        if extra > 0 {
+            s.push_str(&format!(" [+{}]", extra));
+        }
+        out.push(s);
+    }
+    out.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,5 +652,61 @@ added 123 packages in 4.2s";
         assert!(is_diagnostic_line("lib/foo.js(42,7): error TS2304: Cannot find name"));
         assert!(!is_diagnostic_line("Building module 1"));
         assert!(!is_diagnostic_line("added 42 packages in 2.5s"));
+    }
+
+    // ── filter_audit ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn audit_zero_vulnerabilities_returns_clean() {
+        let output = "found 0 vulnerabilities";
+        assert_eq!(filter_audit(output), "[no vulnerabilities found]");
+
+        let output2 = "up to date, audited 512 packages\n0 vulnerabilities found";
+        assert_eq!(filter_audit(output2), "[no vulnerabilities found]");
+    }
+
+    #[test]
+    fn audit_extracts_summary_and_packages() {
+        let output = "\
+npm audit report
+
+lodash  <=4.17.20
+Severity: critical
+Prototype Pollution - https://npmjs.com/advisories/1523
+fix available via `npm audit fix`
+node_modules/lodash
+
+semver  6.0.0 - 6.3.0
+Severity: high
+ReDoS in semver - https://npmjs.com/advisories/1234
+node_modules/semver
+
+6 vulnerabilities (1 low, 2 moderate, 3 critical)";
+        let result = filter_audit(output);
+        assert!(result.contains("vulnerabilities"), "should contain summary, got: {}", result);
+        assert!(result.contains("lodash"), "should list affected package, got: {}", result);
+        assert!(result.contains("critical"), "should show severity, got: {}", result);
+    }
+
+    // ── filter_outdated ───────────────────────────────────────────────────────
+
+    #[test]
+    fn outdated_empty_returns_up_to_date() {
+        assert_eq!(filter_outdated(""), "[all packages up to date]");
+        assert_eq!(filter_outdated("   "), "[all packages up to date]");
+    }
+
+    #[test]
+    fn outdated_parses_table_columns() {
+        let output = "\
+Package          Current   Wanted  Latest  Location
+eslint           7.32.0    7.32.0  8.40.0  node_modules/eslint
+react            17.0.2    17.0.2  18.2.0  my-app
+typescript       4.9.5     4.9.5   5.3.3   my-app";
+        let result = filter_outdated(output);
+        assert!(result.contains("3 packages outdated"), "should count packages, got: {}", result);
+        assert!(result.contains("eslint"), "should list eslint, got: {}", result);
+        assert!(result.contains("8.40.0"), "should show latest version, got: {}", result);
+        assert!(result.contains("react"), "should list react, got: {}", result);
     }
 }

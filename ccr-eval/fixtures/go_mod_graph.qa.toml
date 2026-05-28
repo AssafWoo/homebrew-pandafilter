@@ -1,0 +1,17 @@
+command_hint = "go mod graph"
+
+[[questions]]
+question = "How many total dependencies are in the graph?"
+key_facts = ["41"]
+
+[[questions]]
+question = "What module has the most dependencies?"
+key_facts = ["viper", "spf13/viper"]
+
+[[questions]]
+question = "Is gin-gonic/gin a dependency?"
+key_facts = ["gin-gonic", "gin"]
+
+[[questions]]
+question = "How many modules have dependencies?"
+key_facts = ["8", "9", "10"]

@@ -7,10 +7,15 @@ impl Handler for GoHandler {
     fn rewrite_args(&self, args: &[String]) -> Vec<String> {
         let subcmd = args.get(1).map(|s| s.as_str()).unwrap_or("");
         if subcmd == "test" && !args.iter().any(|a| a == "-json") {
-            let mut out = args.to_vec();
-            // Insert -json after "test"
-            out.insert(2, "-json".to_string());
-            return out;
+            // Only inject -json for recursive test patterns (./...) where output
+            // is large enough that JSON-based aggregation saves tokens. For
+            // single-package tests, plain text output is smaller than NDJSON.
+            let has_recursive = args.iter().any(|a| a.ends_with("/..."));
+            if has_recursive {
+                let mut out = args.to_vec();
+                out.insert(2, "-json".to_string());
+                return out;
+            }
         }
         args.to_vec()
     }
@@ -22,10 +27,11 @@ impl Handler for GoHandler {
             return crate::handlers::golangci_lint::filter_lint(output);
         }
         match subcmd {
-            "build" | "install" | "vet" => filter_build(output),
+            "build" | "install" => filter_build(output),
+            "vet" => filter_vet(output),
             "test" => filter_test(output),
             "run" => filter_run(output),
-            "mod" => filter_mod(output),
+            "mod" => filter_mod(output, args),
             _ => output.to_string(),
         }
     }
@@ -58,6 +64,42 @@ fn filter_build(output: &str) -> String {
         return output.to_string();
     }
     errors.join("\n")
+}
+
+/// Filter `go vet` output.
+///
+/// Clean output (no diagnostics) → "go vet: ok" (short-circuit, saves full pipeline overhead).
+/// Diagnostics → keep file.go:N:N: lines, drop package headers, cap at 20.
+fn filter_vet(output: &str) -> String {
+    // Clean run: only whitespace / "# pkg" package headers → success
+    let has_diagnostics = output.lines().any(|l| {
+        let t = l.trim();
+        !t.is_empty() && !t.starts_with('#') && t.contains(".go:")
+    });
+    if !has_diagnostics {
+        return "go vet: ok".to_string();
+    }
+
+    let diags: Vec<&str> = output
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            !t.is_empty() && !t.starts_with('#') && t.contains(".go:")
+        })
+        .take(20)
+        .collect();
+
+    let total = output.lines().filter(|l| {
+        let t = l.trim();
+        !t.is_empty() && !t.starts_with('#') && t.contains(".go:")
+    }).count();
+
+    let mut out: Vec<String> = diags.iter().map(|l| l.to_string()).collect();
+    if total > 20 {
+        out.push(format!("[+{} more]", total - 20));
+    }
+    out.push(format!("[{} vet issues]", total));
+    out.join("\n")
 }
 
 /// Strip module prefix from a package path, returning just the last segment.
@@ -314,7 +356,12 @@ fn filter_run(output: &str) -> String {
     result.output
 }
 
-fn filter_mod(output: &str) -> String {
+fn filter_mod(output: &str, args: &[String]) -> String {
+    // go mod graph — compress flat dependency tree
+    if args.iter().any(|a| a == "graph") {
+        return filter_mod_graph(output);
+    }
+
     // go mod tidy / download — keep warnings and errors only
     let important: Vec<&str> = output
         .lines()
@@ -333,6 +380,39 @@ fn filter_mod(output: &str) -> String {
     } else {
         important.join("\n")
     }
+}
+
+/// Compress `go mod graph` output by grouping dependencies per parent module.
+/// Input: flat lines of "parent@v dep@v" pairs (often 200+ lines).
+/// Output: "module (N deps)" grouped lines, capped at 30.
+fn filter_mod_graph(output: &str) -> String {
+    use std::collections::BTreeMap;
+    let mut groups: BTreeMap<String, usize> = BTreeMap::new();
+    for line in output.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if let Some(parent) = t.split_whitespace().next() {
+            let module = parent.split('@').next().unwrap_or(parent);
+            *groups.entry(module.to_string()).or_default() += 1;
+        }
+    }
+    if groups.is_empty() {
+        return "[go mod graph: empty]".to_string();
+    }
+    let total: usize = groups.values().sum();
+    let cap = 30;
+    let mut out: Vec<String> = groups
+        .iter()
+        .take(cap)
+        .map(|(m, c)| format!("{} ({})", m, c))
+        .collect();
+    if groups.len() > cap {
+        out.push(format!("[+{} more modules]", groups.len() - cap));
+    }
+    out.push(format!("[{} deps across {} modules]", total, groups.len()));
+    out.join("\n")
 }
 
 #[cfg(test)]
@@ -464,15 +544,51 @@ mod tests {
 
     #[test]
     fn mod_complete_for_empty_output() {
-        assert_eq!(filter_mod(""), "[go mod complete]");
+        assert_eq!(filter_mod("", &[]), "[go mod complete]");
     }
 
     #[test]
     fn mod_keeps_go_prefix_lines() {
         let output = "go: downloading github.com/foo/bar v1.2.3\nsome noise\n";
-        let result = filter_mod(output);
+        let result = filter_mod(output, &[]);
         assert!(result.contains("go: downloading"), "should keep go: lines");
         assert!(!result.contains("some noise"), "should drop noise");
+    }
+
+    #[test]
+    fn mod_graph_groups_by_module() {
+        let output = "\
+github.com/user/repo@v1.0.0 github.com/dep/a@v1.0.0
+github.com/user/repo@v1.0.0 github.com/dep/b@v2.0.0
+github.com/user/repo@v1.0.0 github.com/dep/c@v1.3.0
+github.com/other/lib@v2.0.0 github.com/dep/a@v1.0.0
+";
+        let args: Vec<String> = vec!["go".into(), "mod".into(), "graph".into()];
+        let result = filter_mod(output, &args);
+        assert!(result.contains("github.com/user/repo (3)"), "should group user/repo deps, got: {}", result);
+        assert!(result.contains("github.com/other/lib (1)"), "should group other/lib, got: {}", result);
+        assert!(result.contains("4 deps across 2 modules"), "should show total, got: {}", result);
+    }
+
+    #[test]
+    fn vet_clean_returns_ok() {
+        let output = "# github.com/user/repo/pkg\n";
+        let result = filter_vet(output);
+        assert_eq!(result, "go vet: ok");
+    }
+
+    #[test]
+    fn vet_with_issues_keeps_diagnostics() {
+        let output = "\
+# github.com/user/repo/pkg
+./server.go:42:5: printf: non-constant format string
+./handler.go:89:3: unreachable code
+";
+        let result = filter_vet(output);
+        assert!(result.contains("server.go:42"), "should keep diagnostic, got: {}", result);
+        assert!(result.contains("handler.go:89"), "should keep diagnostic, got: {}", result);
+        assert!(result.contains("2 vet issues"), "should show count, got: {}", result);
+        assert!(!result.contains("# github"), "should drop package header, got: {}", result);
     }
 
     // ── compact_package_name ──────────────────────────────────────────────────

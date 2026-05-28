@@ -1,4 +1,4 @@
-command_hint = "git"
+command_hint = "git status"
 
 [[questions]]
 question = "Is src/billing/invoice.rs staged for commit?"
@@ -14,4 +14,8 @@ key_facts = ["unstaged", "not staged", "modified"]
 
 [[questions]]
 question = "How many files are staged for commit?"
-key_facts = ["18", "eighteen"]
+key_facts = ["18"]
+
+[[questions]]
+question = "Are there any untracked files?"
+key_facts = ["yes", "4", "temp_debug", ".env.local"]

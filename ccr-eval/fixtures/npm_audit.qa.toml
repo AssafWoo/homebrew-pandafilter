@@ -1,0 +1,17 @@
+command_hint = "npm audit"
+
+[[questions]]
+question = "How many total vulnerabilities were found?"
+key_facts = ["6"]
+
+[[questions]]
+question = "What is the most severe vulnerability level?"
+key_facts = ["critical"]
+
+[[questions]]
+question = "Which package has a critical vulnerability?"
+key_facts = ["lodash"]
+
+[[questions]]
+question = "How many high severity vulnerabilities are there?"
+key_facts = ["2"]

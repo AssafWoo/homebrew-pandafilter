@@ -394,101 +394,133 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         result.output = loop_output;
     }
 
-    // ── Session-aware passes ──────────────────────────────────────────────────
-    // Skip BERT-based passes for short outputs: semantic compression and dedup
-    // add latency without meaningful benefit when there are few lines to work with.
-    // All session passes are also skipped in clean-room mode.
+    // ── Handler fast path + graduated bypass ────────────────────────────────
+    //
+    // BERT-based session passes (delta, dedup, cross-dedup, C2 compression) add
+    // 2-5 seconds latency per command via embedding calls. For well-handled short
+    // output, BERT can't improve on what the handler already did — skip it.
+    //
+    // Graduated bypass:
+    //   handler_fast_path: handler compressed >15% AND output < 2000 chars → skip BERT
+    //   soft_bypass: handler output < 1000 chars AND barely compressed (<10%) → skip BERT
+    //   Neither: run full BERT pipeline (large/unhandled output)
     const BERT_MIN_LINES: usize = 15;
     let pipeline_line_count = result.output.lines().count();
 
-    let pipeline_emb = if !clean_room && pipeline_line_count >= BERT_MIN_LINES && crate::bert_budget::try_consume() {
-        panda_core::summarizer::embed_batch(&[result.output.as_str()])
-            .ok()
-            .and_then(|mut v| v.pop())
-    } else {
-        None
-    };
+    let handler_fast_path = command_hint.is_some()
+        && result.output.len() < 2000
+        && (result.output.len() as f64) < (output_text.len() as f64 * 0.85);
 
-    let output_after_delta = if let Some(ref emb) = pipeline_emb {
-        let lines: Vec<&str> = result.output.lines().collect();
-        session
-            .compute_delta(&cmd_key, &lines, emb)
-            .map(|d| d.output)
-            .unwrap_or_else(|| result.output.clone())
-    } else {
-        result.output.clone()
-    };
+    let soft_bypass = !handler_fast_path
+        && result.output.len() < 1000
+        && (result.output.len() as f64 / output_text.len().max(1) as f64) > 0.90;
 
-    let after_dedup = if clean_room {
-        output_after_delta.clone()
-    } else {
-        apply_sentence_dedup(&output_after_delta, &cmd_key, &session)
-    };
+    let skip_bert = clean_room || handler_fast_path || soft_bypass;
 
-    // Determine is_state early so cross-command dedup can respect the guard.
-    let is_state = {
-        if let Ok(cfg) = crate::config_loader::load_config() {
-            cfg.global.state_commands.iter().any(|s| {
-                command_hint.as_deref() == Some(s.as_str())
-            })
-        } else {
-            false
-        }
-    };
-
-    let after_xdedup = if clean_room {
-        after_dedup
-    } else {
-        cross_command_dedup(&after_dedup, &cmd_key, &session, &sid, is_state)
-    };
-
-    // Save any new zoom blocks registered during cross-command dedup.
-    let xdedup_blocks = panda_core::zoom::drain();
-    if !xdedup_blocks.is_empty() {
-        let _ = crate::zoom_store::save_blocks(&sid, xdedup_blocks);
-    }
-
-    let compression_factor = if clean_room { 1.0 } else { session.compression_factor() };
-    let centroid_for_c2 = if clean_room { None } else { session.command_centroid(&cmd_key).cloned() };
-    let mut final_output = if compression_factor < 0.90 && pipeline_line_count >= BERT_MIN_LINES {
-        let line_count = after_xdedup.lines().count();
-        let reduced_budget = ((line_count as f32 * compression_factor) as usize).max(10);
-        if let Some(ref centroid) = centroid_for_c2 {
-            panda_core::summarizer::summarize_against_centroid(&after_xdedup, reduced_budget, centroid)
-                .output
-        } else {
-            panda_core::summarizer::summarize(&after_xdedup, reduced_budget).output
-        }
-    } else {
-        after_xdedup
-    };
-
-    // Session update: record embeddings/centroid/errors for next-turn dedup.
-    // Skipped in clean-room mode — evaluation runs must not pollute session state.
-    if !clean_room && pipeline_line_count >= BERT_MIN_LINES && crate::bert_budget::try_consume() {
-        let non_empty: Vec<&str> = final_output
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .collect();
-        if let Ok(line_embeddings) = panda_core::summarizer::embed_batch(&non_empty) {
-            let tokens = panda_core::tokens::count_tokens(&final_output);
-            // Per-line centroid is higher quality than single-string embed.
-            // Reuse it as the whole-output embedding for delta tracking (saves 1 BERT call).
-            let new_centroid =
-                panda_core::summarizer::compute_centroid_from_embeddings(&line_embeddings);
-            let emb = new_centroid.clone();
-            let centroid_delta = historical_centroid
-                .as_ref()
-                .map(|hist| crate::handlers::util::cosine_similarity(hist, &new_centroid));
-            session.update_command_centroid(&cmd_key, new_centroid);
-            session.record(&cmd_key, emb, tokens, &final_output, is_state, centroid_delta);
-            // Store error signatures so the next run can detect a loop.
+    let mut final_output = if skip_bert {
+        // Fast path: use handler output directly, skip all BERT-based passes.
+        // Still record a lightweight session entry (no embedding) to maintain turn count.
+        if !clean_room {
+            let tokens = panda_core::tokens::count_tokens(&result.output);
+            let zero_emb = vec![0.0f32; 384];
+            let is_state = command_hint.as_deref()
+                .and_then(|h| crate::config_loader::load_config().ok().map(|c| (h.to_string(), c)))
+                .map(|(h, cfg)| cfg.global.state_commands.iter().any(|s| s == &h))
+                .unwrap_or(false);
+            session.record(&cmd_key, zero_emb, tokens, &result.output, is_state, None);
             if !current_error_set.is_empty() {
                 session.set_last_error_signatures(&cmd_key, current_error_set.to_storage());
             }
             session.save(&sid);
         }
-    }
+        result.output.clone()
+    } else {
+        // ── Full BERT pipeline ───────────────────────────────────────────────
+        let pipeline_emb = if pipeline_line_count >= BERT_MIN_LINES && crate::bert_budget::try_consume() {
+            panda_core::summarizer::embed_batch(&[result.output.as_str()])
+                .ok()
+                .and_then(|mut v| v.pop())
+        } else {
+            None
+        };
+
+        let output_after_delta = if let Some(ref emb) = pipeline_emb {
+            let lines: Vec<&str> = result.output.lines().collect();
+            session
+                .compute_delta(&cmd_key, &lines, emb)
+                .map(|d| d.output)
+                .unwrap_or_else(|| result.output.clone())
+        } else {
+            result.output.clone()
+        };
+
+        let after_dedup = if clean_room {
+            output_after_delta.clone()
+        } else {
+            apply_sentence_dedup(&output_after_delta, &cmd_key, &session)
+        };
+
+        let is_state = {
+            if let Ok(cfg) = crate::config_loader::load_config() {
+                cfg.global.state_commands.iter().any(|s| {
+                    command_hint.as_deref() == Some(s.as_str())
+                })
+            } else {
+                false
+            }
+        };
+
+        let after_xdedup = if clean_room {
+            after_dedup
+        } else {
+            cross_command_dedup(&after_dedup, &cmd_key, &session, &sid, is_state)
+        };
+
+        let xdedup_blocks = panda_core::zoom::drain();
+        if !xdedup_blocks.is_empty() {
+            let _ = crate::zoom_store::save_blocks(&sid, xdedup_blocks);
+        }
+
+        let compression_factor = if clean_room { 1.0 } else { session.compression_factor() };
+        let centroid_for_c2 = if clean_room { None } else { session.command_centroid(&cmd_key).cloned() };
+        let bert_output = if compression_factor < 0.90 && pipeline_line_count >= BERT_MIN_LINES {
+            let line_count = after_xdedup.lines().count();
+            let reduced_budget = ((line_count as f32 * compression_factor) as usize).max(10);
+            if let Some(ref centroid) = centroid_for_c2 {
+                panda_core::summarizer::summarize_against_centroid(&after_xdedup, reduced_budget, centroid)
+                    .output
+            } else {
+                panda_core::summarizer::summarize(&after_xdedup, reduced_budget).output
+            }
+        } else {
+            after_xdedup
+        };
+
+        // Session update: record embeddings/centroid/errors for next-turn dedup.
+        if !clean_room && pipeline_line_count >= BERT_MIN_LINES && crate::bert_budget::try_consume() {
+            let non_empty: Vec<&str> = bert_output
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .collect();
+            if let Ok(line_embeddings) = panda_core::summarizer::embed_batch(&non_empty) {
+                let tokens = panda_core::tokens::count_tokens(&bert_output);
+                let new_centroid =
+                    panda_core::summarizer::compute_centroid_from_embeddings(&line_embeddings);
+                let emb = new_centroid.clone();
+                let centroid_delta = historical_centroid
+                    .as_ref()
+                    .map(|hist| crate::handlers::util::cosine_similarity(hist, &new_centroid));
+                session.update_command_centroid(&cmd_key, new_centroid);
+                session.record(&cmd_key, emb, tokens, &bert_output, is_state, centroid_delta);
+                if !current_error_set.is_empty() {
+                    session.set_last_error_signatures(&cmd_key, current_error_set.to_storage());
+                }
+                session.save(&sid);
+            }
+        }
+
+        bert_output
+    };
 
     if pressure > 0.80 {
         final_output.push_str(

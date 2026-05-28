@@ -1,0 +1,17 @@
+command_hint = "tsc"
+
+[[questions]]
+question = "How many TypeScript errors were found?"
+key_facts = ["15"]
+
+[[questions]]
+question = "Which files have errors?"
+key_facts = ["Button.tsx", "Modal.tsx", "useAuth.ts", "client.ts", "format.ts"]
+
+[[questions]]
+question = "What error code appears most often?"
+key_facts = ["TS2339", "TS2551", "TS2345"]
+
+[[questions]]
+question = "Is the axios module missing?"
+key_facts = ["yes", "cannot find module", "TS2307"]

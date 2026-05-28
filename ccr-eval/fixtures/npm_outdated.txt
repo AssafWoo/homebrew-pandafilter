@@ -1,0 +1,13 @@
+Package                Current   Wanted    Latest    Location
+@types/node            18.15.0   18.15.0   20.11.0   node_modules/@types/node
+@types/react           18.2.0    18.2.0    18.2.55   node_modules/@types/react
+eslint                 7.32.0    7.32.0    8.56.0    node_modules/eslint
+eslint-config-next     13.4.0    13.4.0    14.1.0    node_modules/eslint-config-next
+next                   13.4.19   13.4.19   14.1.0    node_modules/next
+react                  18.2.0    18.2.0    18.2.0    node_modules/react
+react-dom              18.2.0    18.2.0    18.2.0    node_modules/react-dom
+typescript             4.9.5     4.9.5     5.3.3     node_modules/typescript
+tailwindcss            3.3.0     3.3.0     3.4.1     node_modules/tailwindcss
+postcss                8.4.23    8.4.23    8.4.35    node_modules/postcss
+autoprefixer           10.4.14   10.4.14   10.4.17   node_modules/autoprefixer
+prettier               2.8.8     2.8.8     3.2.4     node_modules/prettier

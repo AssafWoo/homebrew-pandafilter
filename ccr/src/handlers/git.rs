@@ -55,19 +55,31 @@ impl Handler for GitHandler {
             "log" => {
                 let mut out = args.to_vec();
                 let subcmd_pos = args.iter().position(|a| a.as_str() == subcmd).unwrap_or(1);
-                // Insert flags after subcmd position, in reverse order so they end up
-                // as: log --oneline --graph --decorate
                 let mut insert_pos = subcmd_pos + 1;
                 if !out.iter().any(|a| a == "--oneline") {
                     out.insert(insert_pos, "--oneline".to_string());
                     insert_pos += 1;
                 }
-                if !out.iter().any(|a| a == "--graph") {
-                    out.insert(insert_pos, "--graph".to_string());
-                    insert_pos += 1;
-                }
-                if !out.iter().any(|a| a == "--decorate") {
-                    out.insert(insert_pos, "--decorate".to_string());
+                // Skip --graph and --decorate when the user requested compact output
+                // (--oneline with a small count like -20). These flags inflate compact
+                // 300-byte output to 600+ bytes of ASCII tree art, causing regressions.
+                let has_oneline = out.iter().any(|a| a == "--oneline");
+                let small_count = args.iter().any(|a| {
+                    if a.starts_with('-') && a.len() > 1 {
+                        a[1..].parse::<usize>().map(|n| n <= 25).unwrap_or(false)
+                    } else {
+                        false
+                    }
+                });
+                let compact_mode = has_oneline && small_count;
+                if !compact_mode {
+                    if !out.iter().any(|a| a == "--graph") {
+                        out.insert(insert_pos, "--graph".to_string());
+                        insert_pos += 1;
+                    }
+                    if !out.iter().any(|a| a == "--decorate") {
+                        out.insert(insert_pos, "--decorate".to_string());
+                    }
                 }
                 if out != args {
                     return out;

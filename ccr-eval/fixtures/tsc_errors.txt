@@ -1,0 +1,17 @@
+src/components/Button.tsx(12,5): error TS2322: Type 'string' is not assignable to type 'number'.
+src/components/Button.tsx(34,12): error TS2322: Type 'string' is not assignable to type 'number'.
+src/components/Button.tsx(56,8): error TS2339: Property 'onClick' does not exist on type 'HTMLButtonElement'.
+src/components/Modal.tsx(23,9): error TS2345: Argument of type 'null' is not assignable to parameter of type 'HTMLElement'.
+src/components/Modal.tsx(41,17): error TS2345: Argument of type 'null' is not assignable to parameter of type 'HTMLElement'.
+src/components/Modal.tsx(78,4): error TS2339: Property 'closeModal' does not exist on type 'ModalRef'.
+src/hooks/useAuth.ts(15,3): error TS2304: Cannot find name 'JwtPayload'.
+src/hooks/useAuth.ts(28,15): error TS2531: Object is possibly 'null'.
+src/hooks/useAuth.ts(45,22): error TS7006: Parameter 'token' implicitly has an 'any' type.
+src/api/client.ts(8,1): error TS2307: Cannot find module 'axios' or its corresponding type declarations.
+src/api/client.ts(67,13): error TS2339: Property 'interceptors' does not exist on type 'AxiosInstance'.
+src/utils/format.ts(5,18): error TS2551: Property 'padLeft' does not exist on type 'String'. Did you mean 'padStart'?
+src/utils/format.ts(19,18): error TS2551: Property 'padLeft' does not exist on type 'String'. Did you mean 'padStart'?
+src/utils/format.ts(33,18): error TS2551: Property 'padLeft' does not exist on type 'String'. Did you mean 'padStart'?
+src/types/index.ts(44,5): error TS2411: Property 'id' of type 'string | number' is not assignable to string index type 'string'.
+
+Found 15 errors.
