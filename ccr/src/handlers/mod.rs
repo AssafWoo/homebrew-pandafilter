@@ -90,7 +90,7 @@ pub fn get_handler(cmd: &str) -> Option<Box<dyn Handler>> {
         .or_else(|| get_handler_bert(cmd))
 }
 
-fn get_handler_exact(cmd: &str) -> Option<Box<dyn Handler>> {
+pub(super) fn get_handler_exact(cmd: &str) -> Option<Box<dyn Handler>> {
     match cmd {
         // Existing handlers
         "cargo" => Some(Box::new(cargo::CargoHandler)),
@@ -211,8 +211,24 @@ const STATIC_ALIASES: &[(&str, &str)] = &[
     ("@biomejs/biome",  "biome"),
     // Go linter variants
     ("golangci",        "golangci-lint"),
+    // Node.js local-bin executables (when not on PATH but in node_modules)
+    ("./node_modules/.bin/eslint",    "eslint"),
+    ("./node_modules/.bin/tsc",       "tsc"),
+    ("./node_modules/.bin/prettier",  "prettier"),
+    ("./node_modules/.bin/stylelint", "stylelint"),
+    ("./node_modules/.bin/biome",     "biome"),
+    ("./node_modules/.bin/jest",      "jest"),
+    ("./node_modules/.bin/vitest",    "vitest"),
+    // Python linters that aren't always on PATH by their own name
+    ("flake8",    "mypy"),  // same file:line:col: severity: message format
+    ("flake8-3",  "mypy"),
+    ("pylint",    "mypy"),  // similar diagnostic line format
+    ("ruff-check","ruff"),
     // Ruby ecosystem aliases
-    ("bundle", "rake"),   // bundler exec tasks often funnel through rake
+    // NOTE: "bundle" is intentionally NOT aliased to "rake" here.
+    // `bundle exec rubocop` / `bundle exec rspec` should be handled by
+    // the transparent_prefix stripping ("bundle exec" stripped → rubocop/rspec
+    // routed directly). A "bundle"→"rake" alias was misrouting lint runs.
     ("rubocop-rails",   "rubocop"),
     // Kubernetes wrappers
     ("k",           "kubectl"), ("kubectl.exe", "kubectl"),
@@ -237,7 +253,7 @@ const STATIC_ALIASES: &[(&str, &str)] = &[
     ("bzl",         "bazel"),
 ];
 
-fn get_handler_alias(cmd: &str) -> Option<Box<dyn Handler>> {
+pub(super) fn get_handler_alias(cmd: &str) -> Option<Box<dyn Handler>> {
     // Exact alias lookup
     for &(alias, target) in STATIC_ALIASES {
         if alias == cmd {

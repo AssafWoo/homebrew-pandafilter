@@ -33,22 +33,77 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // ── Savings-only mode: compression metrics without Claude API ────────────
+    // Usage: panda-eval --savings-only [--fixtures-dir <dir>]
+    if args.iter().any(|a| a == "--savings-only") {
+        let fixtures_dir = fixtures_dir_from_args(&args);
+        let fixture_pairs = runner::discover_fixtures(&fixtures_dir)?;
+
+        println!("PandaFilter — Compression Savings Report (no API key required)");
+        println!("================================================================");
+        println!("Fixtures dir: {}", fixtures_dir.display());
+        println!();
+        println!("{:<28} {:>8} {:>8} {:>9} {:>7} {:>7}  handler",
+            "fixture", "tok-in", "tok-out", "savings%", "lines↓", "recall");
+        println!("{}", "-".repeat(85));
+
+        let mut total_in = 0usize;
+        let mut total_out = 0usize;
+        let mut total_facts = 0usize;
+        let mut total_found = 0usize;
+
+        for (txt_path, qa_path) in &fixture_pairs {
+            match runner::run_fixture_savings(txt_path, qa_path) {
+                Ok(r) => {
+                    let recall = if r.facts_total == 0 { 100.0 } else {
+                        r.facts_found as f32 / r.facts_total as f32 * 100.0
+                    };
+                    let savings_sign = if r.savings_pct >= 0.0 { "+" } else { "" };
+                    println!("{:<28} {:>8} {:>8} {:>8}{}% {:>6}→{:<5}  {}",
+                        &r.name[..r.name.len().min(28)],
+                        r.input_tokens,
+                        r.output_tokens,
+                        savings_sign,
+                        r.savings_pct as i32,
+                        r.lines_in,
+                        r.lines_out,
+                        r.handler_name,
+                    );
+                    if recall < 100.0 {
+                        println!("  ⚠ recall {}/{} ({:.0}%) — compressed output missing key facts",
+                            r.facts_found, r.facts_total, recall);
+                    }
+                    total_in += r.input_tokens;
+                    total_out += r.output_tokens;
+                    total_facts += r.facts_total;
+                    total_found += r.facts_found;
+                }
+                Err(e) => println!("{:<28}  ERROR: {}", txt_path.display(), e),
+            }
+        }
+
+        println!("{}", "-".repeat(85));
+        let overall_savings = if total_in == 0 { 0.0 } else {
+            (total_in.saturating_sub(total_out)) as f32 / total_in as f32 * 100.0
+        };
+        let overall_recall = if total_facts == 0 { 100.0 } else {
+            total_found as f32 / total_facts as f32 * 100.0
+        };
+        println!("{:<28} {:>8} {:>8} {:>8}%  overall recall {}/{}  ({:.0}%)",
+            "TOTAL",
+            total_in, total_out,
+            overall_savings as i32,
+            total_found, total_facts,
+            overall_recall,
+        );
+        return Ok(());
+    }
+
     // ── Default: pipeline / conversation eval ────────────────────────────────
     let api_key = std::env::var("ANTHROPIC_API_KEY")
         .expect("ANTHROPIC_API_KEY must be set");
 
-    let fixtures_dir = std::path::PathBuf::from(
-        std::env::var("PANDA_FIXTURES_DIR")
-            .unwrap_or_else(|_| {
-                let exe = std::env::current_exe().unwrap();
-                exe.parent().unwrap()
-                    .parent().unwrap()
-                    .parent().unwrap()
-                    .join("panda-eval/fixtures")
-                    .to_string_lossy()
-                    .into_owned()
-            })
-    );
+    let fixtures_dir = fixtures_dir_from_args(&args);
 
     println!("PandaFilter Evaluation Report");
     println!("=====================");
@@ -101,6 +156,28 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Resolve the fixtures directory from --fixtures-dir <path> arg, env var, or binary-relative default.
+fn fixtures_dir_from_args(args: &[String]) -> std::path::PathBuf {
+    // --fixtures-dir <path>
+    if let Some(pos) = args.iter().position(|a| a == "--fixtures-dir") {
+        if let Some(path) = args.get(pos + 1) {
+            return std::path::PathBuf::from(path);
+        }
+    }
+    std::path::PathBuf::from(
+        std::env::var("PANDA_FIXTURES_DIR")
+            .unwrap_or_else(|_| {
+                let exe = std::env::current_exe().unwrap();
+                exe.parent().unwrap()
+                    .parent().unwrap()
+                    .parent().unwrap()
+                    .join("panda-eval/fixtures")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+    )
 }
 
 /// Locate the benchmark directory relative to this binary.

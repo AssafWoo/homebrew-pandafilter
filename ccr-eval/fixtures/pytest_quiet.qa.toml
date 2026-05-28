@@ -1,0 +1,22 @@
+# Tests pytest -q mode: bare summary line (no === wrapper) must be detected
+command_hint = "pytest -q"
+
+[[questions]]
+question = "How many tests failed?"
+key_facts = ["3", "three"]
+
+[[questions]]
+question = "What error occurred in test_expired_token?"
+key_facts = ["ExpiredSignatureError", "expired"]
+
+[[questions]]
+question = "Were there any unexpected passes (xpassed)?"
+key_facts = ["XPASSED", "xpassed", "1", "legacy_password_hash"]
+
+[[questions]]
+question = "How many tests passed in total?"
+key_facts = ["45"]
+
+[[questions]]
+question = "What was the total duration of the test run?"
+key_facts = ["12.34", "12"]

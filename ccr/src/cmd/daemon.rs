@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use std::io::{Read, Write};
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -51,6 +51,10 @@ fn process_alive(pid: u32) -> bool {
     ret == 0 || (ret == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
 }
 
+fn daemon_socket_connectable() -> bool {
+    UnixStream::connect(embed_client::socket_path()).is_ok()
+}
+
 fn cleanup_daemon_files() {
     let _ = std::fs::remove_file(embed_client::pid_path());
     let _ = std::fs::remove_file(embed_client::socket_path());
@@ -59,8 +63,19 @@ fn cleanup_daemon_files() {
 fn start() -> Result<()> {
     if let Some(pid) = read_pid() {
         if process_alive(pid) {
-            println!("panda daemon already running (pid {})", pid);
-            return Ok(());
+            if daemon_socket_connectable() {
+                println!("panda daemon already running (pid {})", pid);
+                return Ok(());
+            }
+            // Process alive but socket not ready — may still be starting up.
+            // Wait briefly before concluding it's stale.
+            for _ in 0..6 {
+                std::thread::sleep(Duration::from_millis(500));
+                if daemon_socket_connectable() {
+                    println!("panda daemon already running (pid {})", pid);
+                    return Ok(());
+                }
+            }
         }
         cleanup_daemon_files();
     }
@@ -77,11 +92,20 @@ fn start() -> Result<()> {
             bail!("fork failed");
         }
         if pid > 0 {
-            std::thread::sleep(Duration::from_millis(200));
+            // Wait briefly so the grandchild can write the PID before we report.
+            // With the early PID write fix, 200 ms is enough for the file I/O
+            // even if model loading takes much longer.
+            std::thread::sleep(Duration::from_millis(400));
             if let Some(child_pid) = read_pid() {
-                println!("panda daemon started (pid {})", child_pid);
+                if daemon_socket_connectable() {
+                    println!("panda daemon started (pid {})", child_pid);
+                } else {
+                    println!("panda daemon started (pid {}) — loading embedding model...", child_pid);
+                    println!("Run 'panda daemon status' to check when the socket is ready.");
+                }
             } else {
-                println!("panda daemon starting...");
+                println!("panda daemon is starting...");
+                println!("Run 'panda daemon status' in a few seconds to confirm.");
             }
             return Ok(());
         }
@@ -122,6 +146,7 @@ extern "C" fn sigterm_handler(_sig: libc::c_int) {
 fn daemon_main(sock_path: PathBuf, pid_path: PathBuf) -> Result<()> {
     use std::os::unix::io::AsRawFd;
 
+    panda_core::summarizer::set_daemon_mode();
     ensure_dir(&pid_path);
 
     // Hold an exclusive flock on the PID file for the daemon's lifetime.
@@ -139,6 +164,14 @@ fn daemon_main(sock_path: PathBuf, pid_path: PathBuf) -> Result<()> {
     }
 
     let _ = std::fs::remove_file(&sock_path);
+
+    // Write PID immediately after acquiring the exclusive lock so that
+    // `panda daemon status` can observe the process during model loading
+    // (which can take several seconds on first run — before this fix the
+    // PID file was empty during startup, making status report "not running").
+    // We'll overwrite with the same PID value again after binding the socket
+    // to preserve the original invariant: PID file belongs to a socket owner.
+    std::fs::write(&pid_path, format!("{}", std::process::id()))?;
 
     // Apply nice level inside the daemon process only.
     if let Ok(config) = crate::config_loader::load_config() {
@@ -158,9 +191,9 @@ fn daemon_main(sock_path: PathBuf, pid_path: PathBuf) -> Result<()> {
     let listener = UnixListener::bind(&sock_path)?;
     unsafe { libc::umask(old_umask) };
 
-    // Write PID only after bind succeeds, so the file content is meaningful
-    // (the flock above guarantees mutual exclusion; this guarantees the
-    // recorded PID always belongs to a process that owns the socket).
+    // Overwrite with the same PID now that the socket is bound.
+    // The flock above guarantees mutual exclusion; the PID recorded here
+    // always belongs to the process that owns the socket.
     std::fs::write(&pid_path, format!("{}", std::process::id()))?;
     // Keep the lock fd alive until process exit.
     let _pid_lock = pid_lock;
@@ -223,7 +256,7 @@ fn daemon_main(sock_path: PathBuf, pid_path: PathBuf) -> Result<()> {
             match listener.accept() {
                 Ok((stream, _)) => {
                     last_request.store(now_secs(), Ordering::Relaxed);
-                    handle_connection(stream);
+                    std::thread::spawn(move || handle_connection(stream));
                 }
                 Err(_) => break,
             }
@@ -373,6 +406,15 @@ fn status() -> Result<()> {
 
     if !process_alive(pid) {
         println!("panda daemon is not running (stale pid file)");
+        cleanup_daemon_files();
+        return Ok(());
+    }
+
+    if !daemon_socket_connectable() {
+        // Process is alive but socket isn't ready yet — it's still loading the
+        // embedding model. Don't clean up; just report the transient state.
+        println!("panda daemon is starting... (loading embedding model, pid {})", pid);
+        println!("  Run `panda daemon status` again in a few seconds.");
         return Ok(());
     }
 

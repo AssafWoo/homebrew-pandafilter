@@ -2,6 +2,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct HooksConfig {
+    /// Wrapper prefixes transparently stripped before routing, then re-prepended
+    /// after rewrite. Useful for per-project env wrappers like `direnv exec .`
+    /// or `docker exec mycontainer`. Matching is strict (exact prefix + space).
+    /// Example: `transparent_prefixes = ["direnv exec .", "docker exec mycontainer"]`
+    #[serde(default)]
+    pub transparent_prefixes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct CcrConfig {
     #[serde(default)]
     pub global: GlobalConfig,
@@ -11,6 +21,8 @@ pub struct CcrConfig {
     pub tee: TeeConfig,
     #[serde(default)]
     pub read: ReadConfig,
+    #[serde(default)]
+    pub hooks: HooksConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -109,6 +121,9 @@ pub struct GlobalConfig {
     /// Higher values speed up large batches but compete with the editor/LSP.
     #[serde(default = "default_ort_threads")]
     pub ort_threads: usize,
+    /// Maximum number of commits shown by the git log handler. Default 25.
+    #[serde(default = "default_git_log_limit")]
+    pub git_log_limit: usize,
 }
 
 fn default_input_char_ceiling() -> usize {
@@ -129,6 +144,10 @@ fn default_nice_level() -> i32 {
 
 fn default_ort_threads() -> usize {
     2
+}
+
+fn default_git_log_limit() -> usize {
+    25
 }
 
 fn default_state_commands() -> Vec<String> {
@@ -157,6 +176,7 @@ impl Default for GlobalConfig {
             router_exploration_noise: false,
             nice_level: default_nice_level(),
             ort_threads: default_ort_threads(),
+            git_log_limit: default_git_log_limit(),
         }
     }
 }

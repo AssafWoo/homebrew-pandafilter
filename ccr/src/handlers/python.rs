@@ -3,7 +3,25 @@ use super::Handler;
 pub struct PythonHandler;
 
 impl Handler for PythonHandler {
-    fn filter(&self, output: &str, _args: &[String]) -> String {
+    fn filter(&self, output: &str, args: &[String]) -> String {
+        // `python -m MODULE [args...]` — delegate to the dedicated module handler.
+        // This covers `python -m ruff check .`, `python3 -m mypy src/`, etc.
+        // Without this, all module output falls through to generic BERT summarization
+        // instead of the specialized lint/test handler, causing the Lint benchmark gap.
+        if let Some(m_pos) = args.iter().position(|a| a == "-m") {
+            if let Some(module) = args.get(m_pos + 1).map(|s| s.as_str()) {
+                // Build args as if the module name were argv[0]
+                let module_args: Vec<String> = std::iter::once(module.to_string())
+                    .chain(args.iter().skip(m_pos + 2).cloned())
+                    .collect();
+                if let Some(handler) = super::get_handler_exact(module)
+                    .or_else(|| super::get_handler_alias(module))
+                {
+                    return handler.filter(output, &module_args);
+                }
+            }
+        }
+
         // Detect Office / structured data formats before general filtering
         if looks_like_pptx(output) {
             return filter_pptx(output);

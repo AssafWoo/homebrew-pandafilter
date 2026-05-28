@@ -5,6 +5,7 @@ tail_lines = 30
 strip_ansi = true
 normalize_whitespace = true
 deduplicate_lines = true
+git_log_limit = 25
 
 [commands.git]
 patterns = [
@@ -95,3 +96,56 @@ patterns = [
 enabled = true
 mode = "aggressive"
 max_files = 20
+
+[commands.flutter]
+patterns = [
+  # dependency resolution noise
+  { regex = "^Resolving dependencies\\.\\.\\.", action = "Remove" },
+  { regex = "^Downloading packages\\.\\.\\.", action = "Remove" },
+  { regex = "^  \\S+ \\d+\\.\\d+\\.\\d+ \\(\\d+\\.\\d+\\.\\d+ available\\)", action = "Collapse" },
+  { regex = "^\\d+ packages have newer versions incompatible", action = "Remove" },
+  { regex = "^Try `flutter pub outdated`", action = "Remove" },
+  { regex = "^Changed \\d+ dependencies!", action = "Remove" },
+  { regex = "^Got dependencies!", action = "Remove" },
+
+  # upgrade banners
+  { regex = "^[┌│└─┐┘╔╗╚╝║]", action = "Remove" },
+  { regex = "^A new version of Flutter is available!", action = "Remove" },
+  { regex = "^To update to the latest version, run", action = "Remove" },
+
+  # build progress lines
+  { regex = "^Running Gradle task", action = "Remove" },
+  { regex = "^\\s*\\[\\s*\\+?\\d+\\s*ms\\]", action = "Remove" },
+  { regex = "^Building with sound null safety", action = "Remove" },
+  { regex = "^💪 Building with sound null safety", action = "Remove" },
+
+  # xcode / ios build noise
+  { regex = "^Xcode build done\\.", action = "Remove" },
+  { regex = "^Building .* for .* device", action = "Remove" },
+  { regex = "^Warning: Operand of null-aware operation", action = "Remove" },
+
+  # analyze spinner / progress
+  { regex = "^Analyzing \\S+\\.\\.\\.\\s*$", action = "Remove" },
+
+  # pub get / upgrade download lines
+  { regex = "^\\+ \\S+ \\d+\\.\\d+", action = "Collapse" },
+  { regex = "^  \\S+ \\d+\\.\\d+\\.\\d+$", action = "Remove" },
+
+  # gradle daemon / jvm noise
+  { regex = "^Starting a Gradle Daemon", action = "Remove" },
+  { regex = "^Daemon will be stopped", action = "Remove" },
+  { regex = "^> Configure project", action = "Remove" },
+  { regex = "^> Task :", action = "Collapse" },
+  { regex = "^BUILD SUCCESSFUL in", action = "Remove" },
+
+  # cocoapods noise
+  { regex = "^Running pod install", action = "Remove" },
+  { regex = "^CocoaPods' output:", action = "Remove" },
+  { regex = "^    CDN: trunk", action = "Remove" },
+  { regex = "^Analyzing dependencies", action = "Remove" },
+  { regex = "^Downloading dependencies", action = "Remove" },
+  { regex = "^Installing \\S+ \\(", action = "Collapse" },
+  { regex = "^Generating Pods project", action = "Remove" },
+  { regex = "^Integrating client project", action = "Remove" },
+  { regex = "^Pod installation complete!", action = "Remove" },
+]

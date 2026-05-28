@@ -76,11 +76,15 @@ impl Handler for LsHandler {
             if shown >= limit {
                 break;
             }
-            if entry.is_dir {
-                out.push(format!("{}/", entry.name));
-            } else {
-                out.push(entry.name.clone());
-            }
+            let line = match (entry.kind, &entry.size_hr) {
+                ('d', _)           => format!("{}/", entry.name),
+                ('l', _)           => format!("{} →", entry.name),
+                ('x', Some(sz))    => format!("{} *  {}", entry.name, sz),
+                ('x', None)        => format!("{} *", entry.name),
+                (_, Some(sz))      => format!("{}  {}", entry.name, sz),
+                (_, None)          => entry.name.clone(),
+            };
+            out.push(line);
             shown += 1;
         }
 
@@ -134,6 +138,30 @@ fn build_ext_summary(files: &[&LsEntry]) -> Option<String> {
 struct LsEntry {
     name: String,
     is_dir: bool,
+    /// Human-readable size string for long-format entries (e.g. "1.2M", "4.0K").
+    /// None for short-format entries where size is unavailable.
+    size_hr: Option<String>,
+    /// Single char type indicator: 'd' dir, 'l' symlink, 'x' executable, 'f' file.
+    kind: char,
+}
+
+/// Convert a raw byte count (from `ls -l`) to a human-readable string.
+/// Uses base-1024 units: B, K, M, G, T.
+fn humanize_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "K", "M", "G", "T"];
+    let mut val = bytes as f64;
+    let mut unit_idx = 0;
+    while val >= 1024.0 && unit_idx + 1 < UNITS.len() {
+        val /= 1024.0;
+        unit_idx += 1;
+    }
+    if unit_idx == 0 {
+        format!("{}B", bytes)
+    } else if val < 10.0 {
+        format!("{:.1}{}", val, UNITS[unit_idx])
+    } else {
+        format!("{:.0}{}", val, UNITS[unit_idx])
+    }
 }
 
 fn parse_long_format(lines: &[&str]) -> Vec<LsEntry> {
@@ -142,12 +170,33 @@ fn parse_long_format(lines: &[&str]) -> Vec<LsEntry> {
         .filter(|l| !l.starts_with("total "))
         .filter_map(|l| {
             let parts: Vec<&str> = l.split_whitespace().collect();
-            if parts.is_empty() {
+            // Minimum long-format columns: perms links owner group size month day time/year name
+            if parts.len() < 5 {
                 return None;
             }
-            let is_dir = parts[0].starts_with('d');
+            let perms = parts[0];
+            let is_dir = perms.starts_with('d');
+            let is_link = perms.starts_with('l');
+            let is_exec = !is_dir && !is_link && perms.contains('x');
+
+            // Size is the column just before the date (month name).
+            // Find the first month-name column (Jan-Dec) and take the column before it.
+            let months = ["Jan","Feb","Mar","Apr","May","Jun",
+                          "Jul","Aug","Sep","Oct","Nov","Dec"];
+            let size_bytes: Option<u64> = parts.iter().enumerate()
+                .find(|(_, p)| months.iter().any(|m| *m == **p))
+                .and_then(|(i, _)| if i > 0 { parts.get(i - 1) } else { None })
+                .and_then(|s| s.parse().ok());
+
             let name = parts.last()?.to_string();
-            Some(LsEntry { name, is_dir })
+            let kind = if is_dir { 'd' } else if is_link { 'l' } else if is_exec { 'x' } else { 'f' };
+
+            Some(LsEntry {
+                name,
+                is_dir,
+                size_hr: size_bytes.map(humanize_bytes),
+                kind,
+            })
         })
         .collect()
 }
@@ -157,9 +206,14 @@ fn parse_short_format(lines: &[&str]) -> Vec<LsEntry> {
         .iter()
         .flat_map(|l| {
             // Space-separated or one-per-line
-            l.split_whitespace().map(|name| LsEntry {
-                is_dir: name.ends_with('/'),
-                name: name.trim_end_matches('/').to_string(),
+            l.split_whitespace().map(|name| {
+                let is_dir = name.ends_with('/');
+                LsEntry {
+                    is_dir,
+                    name: name.trim_end_matches('/').to_string(),
+                    size_hr: None,
+                    kind: if is_dir { 'd' } else { 'f' },
+                }
             })
         })
         .collect()
@@ -227,6 +281,36 @@ mod tests {
         let result = run_filter(output);
         assert!(result.contains("main.rs"), "got: {}", result);
         assert!(result.contains("[0 dirs, 3 files]"), "got: {}", result);
+    }
+
+    #[test]
+    fn test_long_format_shows_human_readable_size() {
+        // Simulate `ls -la` output: perms links owner group size month day time name
+        let output = "\
+total 48
+drwxr-xr-x  5 user group  4096 Jan 15 10:23 src
+-rw-r--r--  1 user group  2048 Jan 15 10:23 Cargo.toml
+-rwxr-xr-x  1 user group 1048576 Jan 15 10:23 my_binary
+-rw-r--r--  1 user group  512 Jan 15 10:23 README.md
+";
+        let result = run_filter(output);
+        // Directory should be shown with trailing slash
+        assert!(result.contains("src/"), "dir should have trailing slash, got: {}", result);
+        // Regular file should show size
+        assert!(result.contains("2.0K") || result.contains("2K"), "Cargo.toml size should be humanized, got: {}", result);
+        // Executable should be marked
+        assert!(result.contains("my_binary"), "binary should appear, got: {}", result);
+        assert!(result.contains("1.0M") || result.contains("1M"), "binary size should be humanized, got: {}", result);
+    }
+
+    #[test]
+    fn test_humanize_bytes() {
+        assert_eq!(humanize_bytes(0), "0B");
+        assert_eq!(humanize_bytes(512), "512B");
+        assert_eq!(humanize_bytes(1024), "1.0K");
+        assert_eq!(humanize_bytes(2048), "2.0K");
+        assert_eq!(humanize_bytes(1048576), "1.0M");
+        assert_eq!(humanize_bytes(1073741824), "1.0G");
     }
 
     #[test]

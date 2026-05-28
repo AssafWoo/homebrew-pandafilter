@@ -55,6 +55,15 @@ fn effective_critical_pattern() -> Regex {
 static MODEL_NAME: OnceCell<String> = OnceCell::new();
 static NICE_LEVEL: OnceCell<i32> = OnceCell::new();
 static ORT_THREADS: OnceCell<usize> = OnceCell::new();
+static IS_DAEMON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_daemon_mode() {
+    IS_DAEMON.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn in_daemon() -> bool {
+    IS_DAEMON.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 pub fn set_nice_level(level: i32) {
     let _ = NICE_LEVEL.set(level);
@@ -375,6 +384,13 @@ fn compute_centroid(embeddings: &[Vec<f32>]) -> Vec<f32> {
 }
 
 pub fn embed_direct(texts: Vec<&str>) -> anyhow::Result<Vec<Vec<f32>>> {
+    #[cfg(unix)]
+    if !in_daemon() {
+        if let Some(embeddings) = crate::embed_client::daemon_embed(&texts, true) {
+            return Ok(embeddings);
+        }
+        apply_nice_once();
+    }
     let model = get_model()?;
     let mut embeddings = model.embed(&texts)?;
     for emb in &mut embeddings {
@@ -384,17 +400,18 @@ pub fn embed_direct(texts: Vec<&str>) -> anyhow::Result<Vec<Vec<f32>>> {
 }
 
 pub fn embed_raw(texts: Vec<&str>) -> anyhow::Result<Vec<Vec<f32>>> {
+    #[cfg(unix)]
+    if !in_daemon() {
+        if let Some(embeddings) = crate::embed_client::daemon_embed(&texts, false) {
+            return Ok(embeddings);
+        }
+        apply_nice_once();
+    }
     let model = get_model()?;
     model.embed(&texts)
 }
 
 fn embed_and_normalize(texts: Vec<&str>) -> anyhow::Result<Vec<Vec<f32>>> {
-    #[cfg(unix)]
-    if let Some(embeddings) = crate::embed_client::daemon_embed(&texts, true) {
-        return Ok(embeddings);
-    }
-    #[cfg(unix)]
-    apply_nice_once();
     embed_direct(texts)
 }
 

@@ -6,19 +6,24 @@ pub struct PipHandler;
 impl Handler for PipHandler {
     fn rewrite_args(&self, args: &[String]) -> Vec<String> {
         let subcmd = args.get(1).map(|s| s.as_str()).unwrap_or("");
-        // uv doesn't support -q the same way; leave uv args unchanged
         let is_uv = args.get(0).map(|s| s.as_str()).unwrap_or("") == "uv";
+        let mut out = args.to_vec();
+
         if !is_uv && (subcmd == "install" || subcmd == "add") {
-            if args.iter().any(|a| a == "-q" || a == "--quiet") {
-                args.to_vec()
-            } else {
-                let mut out = args.to_vec();
+            if !out.iter().any(|a| a == "-q" || a == "--quiet") {
                 out.push("-q".to_string());
-                out
             }
-        } else {
-            args.to_vec()
         }
+
+        // Inject --format=json for pip list/outdated to get structured, parseable output.
+        // Reduces raw tabular output to compact name+version pairs.
+        if !is_uv && (subcmd == "list" || subcmd == "outdated") {
+            if !out.iter().any(|a| a.starts_with("--format")) {
+                out.push("--format=json".to_string());
+            }
+        }
+
+        out
     }
 
     fn filter(&self, output: &str, args: &[String]) -> String {
@@ -26,10 +31,14 @@ impl Handler for PipHandler {
         let subcmd = args.get(1).map(|s| s.as_str()).unwrap_or("");
 
         match subcmd {
-            "freeze" | "list" => return output.to_string(),
+            "freeze" => return output.to_string(),
+            "list" | "outdated" => return filter_pip_list(output),
             "install" | "add" => {
                 if cmd == "uv" {
                     return filter_uv_install(output);
+                }
+                if cmd == "poetry" || cmd == "pdm" {
+                    return filter_poetry_install(output);
                 }
                 return filter_pip_install(output);
             }
@@ -44,6 +53,103 @@ impl Handler for PipHandler {
             .unwrap_or(output)
             .to_string()
     }
+}
+
+/// Filter `poetry install` / `pdm install` output.
+///
+/// Poetry's "nothing to do" messages are different from pip's, so they need
+/// their own short-circuit patterns:
+///   "No dependencies to install or update."
+///   "Package operations: 0 installs, 0 updates, 0 removals"
+///
+/// When something IS installed, emit a one-liner summary instead of all the
+/// "  - Installing <pkg> (<ver>)" lines.
+fn filter_poetry_install(output: &str) -> String {
+    const POETRY_SATISFIED_RULES: &[util::MatchOutputRule] = &[
+        util::MatchOutputRule {
+            success_pattern: r"(?i)No dependencies to install or update",
+            error_pattern: r"(?i)error|failed|warning",
+            ok_message: "ok (up to date)",
+        },
+        util::MatchOutputRule {
+            // "Package operations: 0 installs, 0 updates, 0 removals"
+            success_pattern: r"Package operations: 0 installs, 0 updates, 0 removals",
+            error_pattern: r"(?i)error|failed",
+            ok_message: "ok (up to date)",
+        },
+    ];
+    if let Some(msg) = util::check_match_output(output, POETRY_SATISFIED_RULES) {
+        return msg;
+    }
+
+    // Count installs/updates from "Package operations: N installs, M updates, K removals"
+    // and warnings from any WARNING lines.
+    let mut summary: Option<String> = None;
+    let mut warnings: Vec<String> = Vec::new();
+
+    for line in output.lines() {
+        let t = line.trim();
+        if t.starts_with("Package operations:") {
+            summary = Some(t.to_string());
+        } else if t.to_uppercase().starts_with("WARNING") || t.to_uppercase().starts_with("ERROR") {
+            warnings.push(line.to_string());
+        }
+    }
+
+    let mut out: Vec<String> = warnings;
+    if let Some(s) = summary {
+        out.push(s);
+    } else {
+        // Fallback: count "Installing" lines
+        let installed = output.lines().filter(|l| l.trim().starts_with("- Installing")).count();
+        if installed > 0 {
+            out.push(format!("[poetry install complete — {} packages]", installed));
+        } else {
+            return output.to_string();
+        }
+    }
+    out.join("\n")
+}
+
+/// Filter `pip list --format=json` or `pip outdated --format=json` output.
+///
+/// JSON format: `[{"name":"pkg","version":"1.0"}, ...]`
+/// Compresses to: `pkg==1.0, pkg2==2.3, ...` with a cap of 50 packages.
+/// Falls back to raw output if JSON parse fails (user overrode --format).
+fn filter_pip_list(output: &str) -> String {
+    // Try JSON parse
+    let trimmed = output.trim();
+    if trimmed.starts_with('[') {
+        if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(trimmed) {
+            let cap = 50usize;
+            let total = arr.len();
+            let mut pkgs: Vec<String> = arr.iter().take(cap).filter_map(|v| {
+                let name = v.get("name")?.as_str()?;
+                let ver = v.get("version").and_then(|v| v.as_str()).unwrap_or("?");
+                // For outdated, also show latest version
+                if let Some(latest) = v.get("latest_version").and_then(|v| v.as_str()) {
+                    Some(format!("{}=={} → {}", name, ver, latest))
+                } else {
+                    Some(format!("{}=={}", name, ver))
+                }
+            }).collect();
+
+            if total > cap {
+                pkgs.push(format!("[+{} more packages]", total - cap));
+            }
+            pkgs.push(format!("[{} packages total]", total));
+            return pkgs.join("\n");
+        }
+    }
+
+    // Non-JSON fallback: cap long tabular output
+    let lines: Vec<&str> = output.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.len() <= 50 {
+        return output.to_string();
+    }
+    let mut out: Vec<String> = lines[..50].iter().map(|l| l.to_string()).collect();
+    out.push(format!("[+{} more packages]", lines.len() - 50));
+    out.join("\n")
 }
 
 fn filter_pip_install(output: &str) -> String {
@@ -190,5 +296,47 @@ mod tests {
         );
         assert_ne!(result, "ok (already satisfied)");
         assert!(result.contains("pip install complete") || result.contains("requests"));
+    }
+
+    #[test]
+    fn poetry_no_changes_short_circuits() {
+        let output = "No dependencies to install or update.";
+        let result = handler().filter(output, &["poetry".to_string(), "install".to_string()]);
+        assert_eq!(result, "ok (up to date)");
+    }
+
+    #[test]
+    fn poetry_zero_ops_short_circuits() {
+        let output = "Package operations: 0 installs, 0 updates, 0 removals\n";
+        let result = handler().filter(output, &["poetry".to_string(), "install".to_string()]);
+        assert_eq!(result, "ok (up to date)");
+    }
+
+    #[test]
+    fn poetry_actual_install_shows_summary() {
+        let output = "\
+Installing dependencies from lock file
+
+Package operations: 3 installs, 1 update, 0 removals
+
+  - Updating certifi (2023.7.22 -> 2024.2.2)
+  - Installing charset-normalizer (3.3.2)
+  - Installing idna (3.6)
+  - Installing requests (2.31.0)
+";
+        let result = handler().filter(output, &["poetry".to_string(), "install".to_string()]);
+        assert!(result.contains("Package operations: 3 installs"), "should show summary line");
+        assert!(!result.contains("Installing charset-normalizer"), "should drop individual install lines");
+    }
+
+    #[test]
+    fn poetry_error_not_short_circuited() {
+        let output = "\
+No dependencies to install or update.
+Error: Could not find a matching version of package foo
+";
+        let result = handler().filter(output, &["poetry".to_string(), "install".to_string()]);
+        // Error present → short-circuit should NOT fire, raw output preserved
+        assert_ne!(result, "ok (up to date)");
     }
 }

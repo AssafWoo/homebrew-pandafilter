@@ -1,4 +1,63 @@
 use anyhow::Result;
+use once_cell::sync::Lazy;
+use regex::Regex;
+use std::borrow::Cow;
+
+/// Matches a bash line-continuation: backslash + optional horizontal whitespace
+/// before the `\n` (or `\r\n`) + optional horizontal whitespace after. This is
+/// what bash itself collapses to a single space before executing, so the hook
+/// rewriter must do the same or multi-line commands bypass the matcher entirely.
+static LINE_CONTINUATION_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?m)[ \t\x0B\x0C]*\\\r?\n[ \t\x0B\x0C]*").unwrap());
+
+/// Replace every bash line continuation with a single space, mirroring bash.
+/// Returns a borrowed `&str` when the input has no continuations (zero allocation).
+fn collapse_line_continuations(s: &str) -> Cow<'_, str> {
+    LINE_CONTINUATION_RE.replace_all(s, " ")
+}
+
+/// Shell prefix builtins that modify *how* the shell runs a command without
+/// changing *which* command runs. Strip before routing; re-prepend after rewrite.
+const SHELL_PREFIX_BUILTINS: &[&str] = &["noglob", "command", "builtin", "exec", "nocorrect"];
+
+/// Maximum number of transparent-prefix stripping passes to prevent infinite
+/// recursion when a user configures a prefix that keeps matching itself.
+const MAX_PREFIX_DEPTH: usize = 10;
+
+/// Sort prefixes longest-first (so `docker exec mycontainer` wins over `docker`)
+/// and dedup. Returns a new vec; input is unchanged.
+fn normalize_transparent_prefixes(prefixes: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = prefixes
+        .iter()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect();
+    out.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    out.dedup();
+    out
+}
+
+/// Strip `prefix` from `cmd` with a strict word-boundary check.
+/// Returns the rest of the command (trimmed) on match, or `None`.
+fn strip_word_prefix<'a>(cmd: &'a str, prefix: &str) -> Option<&'a str> {
+    if cmd == prefix {
+        Some("")
+    } else if cmd.len() > prefix.len()
+        && cmd.starts_with(prefix)
+        && cmd.as_bytes()[prefix.len()] == b' '
+    {
+        Some(cmd[prefix.len() + 1..].trim_start())
+    } else {
+        None
+    }
+}
+
+/// Load user-configured transparent prefixes from the global config.
+fn load_transparent_prefixes() -> Vec<String> {
+    crate::config_loader::load_config()
+        .map(|c| c.hooks.transparent_prefixes)
+        .unwrap_or_default()
+}
 
 /// Returns the full path to the running panda binary so rewritten commands
 /// work in non-interactive shells where `~/.cargo/bin` may not be in PATH.
@@ -28,21 +87,36 @@ pub fn run(command: String) -> Result<()> {
 
 /// Rewrite a full command string. Returns `Some(rewritten)` if rewrite is needed,
 /// or `None` if no handler matches or already wrapped.
+///
+/// Normalizes bash line continuations (`\<NL>`) and strips transparent wrapper
+/// prefixes (built-ins + user-configured `[hooks].transparent_prefixes`) before
+/// routing, re-prepending them after the rewrite.
 pub fn rewrite_command(command: &str) -> Option<String> {
+    let normalized = collapse_line_continuations(command);
+    let command = normalized.as_ref();
+
+    let raw_prefixes = load_transparent_prefixes();
+    let prefixes = normalize_transparent_prefixes(&raw_prefixes);
+
+    rewrite_command_impl(command, &prefixes)
+}
+
+/// Inner implementation; accepts already-normalized command and prefixes.
+/// Separated so tests can inject prefixes without touching the config file.
+fn rewrite_command_impl(command: &str, prefixes: &[String]) -> Option<String> {
     // Handle compound commands: &&, ||, ;
-    // Try to split and rewrite each part
-    if let Some(result) = rewrite_compound(command, " && ") {
+    if let Some(result) = rewrite_compound(command, " && ", prefixes) {
         return Some(result);
     }
-    if let Some(result) = rewrite_compound(command, " || ") {
+    if let Some(result) = rewrite_compound(command, " || ", prefixes) {
         return Some(result);
     }
-    if let Some(result) = rewrite_compound(command, "; ") {
+    if let Some(result) = rewrite_compound(command, "; ", prefixes) {
         return Some(result);
     }
 
     // Single command
-    rewrite_single(command)
+    rewrite_single_inner(command, prefixes, 0)
 }
 
 /// Returns the byte offset where the actual command starts, after any leading
@@ -208,10 +282,13 @@ fn rewrite_head_tail(cmd: &str) -> Option<String> {
     Some(format!("{} run cat {}", panda_bin(), file))
 }
 
-/// Rewrite a single (non-compound) command.
-/// Uses the handler's `rewrite_args` to inject flags (e.g. --message-format json)
-/// so the rewritten command string reflects the actual args that will be run.
-fn rewrite_single(command: &str) -> Option<String> {
+/// Rewrite a single (non-compound) command, trying transparent prefixes first.
+/// `depth` guards against infinite recursion when prefixes nest.
+fn rewrite_single_inner(command: &str, prefixes: &[String], depth: usize) -> Option<String> {
+    if depth >= MAX_PREFIX_DEPTH {
+        return None;
+    }
+
     let trimmed = command.trim();
 
     // Don't double-wrap
@@ -224,6 +301,32 @@ fn rewrite_single(command: &str) -> Option<String> {
     if has_stdout_diversion(trimmed) {
         return None;
     }
+
+    // ── Shell built-in transparent prefixes ──────────────────────────────────
+    // noglob, command, builtin, exec, nocorrect — strip, rewrite inner, re-prepend.
+    for &builtin in SHELL_PREFIX_BUILTINS {
+        if let Some(rest) = strip_word_prefix(trimmed, builtin) {
+            if rest.is_empty() {
+                return None;
+            }
+            return rewrite_single_inner(rest, prefixes, depth + 1)
+                .map(|r| format!("{} {}", builtin, r));
+        }
+    }
+
+    // ── User-configured transparent prefixes ─────────────────────────────────
+    // e.g. "direnv exec .", "docker exec mycontainer"
+    for prefix in prefixes {
+        if let Some(rest) = strip_word_prefix(trimmed, prefix) {
+            if rest.is_empty() {
+                return None;
+            }
+            return rewrite_single_inner(rest, prefixes, depth + 1)
+                .map(|r| format!("{} {}", prefix, r));
+        }
+    }
+
+    // ── Route the actual command ─────────────────────────────────────────────
 
     // Strip any leading KEY=VALUE env-variable prefix tokens so we can match
     // the actual command name (e.g. `RUST_LOG=debug cargo build` → `cargo`).
@@ -245,13 +348,13 @@ fn rewrite_single(command: &str) -> Option<String> {
     let args: Vec<String> = cmd_part.split_whitespace().map(String::from).collect();
     let rewritten_args = handler.rewrite_args(&args);
 
-    // Preserve env prefix before `ccr run` so the shell sets those vars for the process.
+    // Preserve env prefix before `panda run` so the shell sets those vars for the process.
     Some(format!("{}{} run {}", env_part, panda_bin(), rewritten_args.join(" ")))
 }
 
 /// Try to split a compound command on `operator` and rewrite each part.
 /// Returns `Some(rewritten)` only if at least one part was rewritten.
-fn rewrite_compound(command: &str, operator: &str) -> Option<String> {
+fn rewrite_compound(command: &str, operator: &str, prefixes: &[String]) -> Option<String> {
     if !command.contains(operator) {
         return None;
     }
@@ -265,7 +368,7 @@ fn rewrite_compound(command: &str, operator: &str) -> Option<String> {
     let rewritten: Vec<String> = parts
         .iter()
         .map(|part| {
-            if let Some(r) = rewrite_single(part.trim()) {
+            if let Some(r) = rewrite_single_inner(part.trim(), prefixes, 0) {
                 any_rewritten = true;
                 r
             } else {
@@ -609,5 +712,185 @@ mod tests {
         let r = result.expect("compound should rewrite");
         assert!(r.contains("run cat src/main.rs"), "head part: {}", r);
         assert!(r.contains("run git status"), "git part: {}", r);
+    }
+
+    // ── line-continuation tests ───────────────────────────────────────────────
+
+    /// Helper: rewrite with explicit transparent prefixes (bypasses config file).
+    fn rewrite_with_prefixes(cmd: &str, prefixes: &[&str]) -> Option<String> {
+        let normalized = collapse_line_continuations(cmd);
+        let p: Vec<String> = prefixes.iter().map(|s| s.to_string()).collect();
+        let p = normalize_transparent_prefixes(&p);
+        rewrite_command_impl(normalized.as_ref(), &p)
+    }
+
+    #[test]
+    fn line_continuation_basic() {
+        // "git status \<NL>" should collapse to "git status" and be rewritten
+        let cmd = "git status \\\n";
+        let r = rewrite_command(cmd).expect("should rewrite after line-continuation collapse");
+        assert!(r.contains("run git status --porcelain"), "got: {}", r);
+    }
+
+    #[test]
+    fn line_continuation_mid_command() {
+        // "git \<NL>status" should collapse to "git status"
+        let cmd = "git \\\nstatus";
+        let r = rewrite_command(cmd).expect("should rewrite");
+        assert!(r.contains("run git status"), "got: {}", r);
+    }
+
+    #[test]
+    fn line_continuation_with_spaces_around_break() {
+        // "git status   \<NL>   " — horizontal whitespace before/after break collapses to one space
+        let cmd = "git status   \\\n   ";
+        let r = rewrite_command(cmd).expect("should rewrite after collapsing spaces around break");
+        assert!(r.contains("run git status"), "got: {}", r);
+    }
+
+    #[test]
+    fn line_continuation_crlf() {
+        let cmd = "git status \\\r\n";
+        let r = rewrite_command(cmd).expect("CRLF line continuation should be collapsed");
+        assert!(r.contains("run git status"), "got: {}", r);
+    }
+
+    #[test]
+    fn line_continuation_compound() {
+        // "cargo build \<NL>&& git status" should rewrite both sides
+        let cmd = "cargo build \\\n&& git status";
+        let r = rewrite_command(cmd).expect("compound with continuation should rewrite");
+        assert!(r.contains("run cargo build"), "cargo part: {}", r);
+        assert!(r.contains("run git status"), "git part: {}", r);
+    }
+
+    #[test]
+    fn collapse_line_continuations_no_alloc_on_clean_input() {
+        // When there are no line continuations, collapse_line_continuations should
+        // return a Borrowed variant (zero allocation fast path).
+        let s = "git status";
+        let result = collapse_line_continuations(s);
+        assert_eq!(result.as_ref(), "git status");
+    }
+
+    // ── transparent_prefix tests ─────────────────────────────────────────────
+
+    #[test]
+    fn builtin_exec_prefix_stripped() {
+        // "exec git status" → strip "exec", rewrite inner "git status"
+        let r = rewrite_command("exec git status").expect("should rewrite");
+        assert!(r.starts_with("exec "), "should re-prepend exec: {}", r);
+        assert!(r.contains("run git status"), "inner cmd should be rewritten: {}", r);
+    }
+
+    #[test]
+    fn builtin_command_prefix_stripped() {
+        let r = rewrite_command("command git status").expect("should rewrite");
+        assert!(r.starts_with("command "), "got: {}", r);
+        assert!(r.contains("run git status"), "got: {}", r);
+    }
+
+    #[test]
+    fn builtin_noglob_prefix_stripped() {
+        let r = rewrite_command("noglob cargo build").expect("should rewrite");
+        assert!(r.starts_with("noglob "), "got: {}", r);
+        assert!(r.contains("run cargo build"), "got: {}", r);
+    }
+
+    #[test]
+    fn user_transparent_prefix_stripped() {
+        // "direnv exec . git status" with prefix "direnv exec ." configured
+        let r = rewrite_with_prefixes("direnv exec . git status", &["direnv exec ."])
+            .expect("should rewrite");
+        assert!(r.starts_with("direnv exec . "), "should re-prepend prefix: {}", r);
+        assert!(r.contains("run git status"), "inner cmd should be wrapped: {}", r);
+    }
+
+    #[test]
+    fn user_transparent_prefix_longer_wins() {
+        // "docker exec mycontainer git status" — longer prefix should match
+        let r = rewrite_with_prefixes(
+            "docker exec mycontainer git status",
+            &["docker exec mycontainer", "docker"],
+        )
+        .expect("should rewrite");
+        assert!(
+            r.starts_with("docker exec mycontainer "),
+            "longer prefix should win: {}", r
+        );
+        assert!(r.contains("run git status"), "got: {}", r);
+    }
+
+    #[test]
+    fn prefix_only_no_inner_command() {
+        // A command that IS just the prefix returns None (no inner cmd to route)
+        assert_eq!(
+            rewrite_with_prefixes("direnv exec .", &["direnv exec ."]),
+            None
+        );
+    }
+
+    #[test]
+    fn prefix_inner_unknown_command() {
+        // Prefix + unknown inner command still returns None (no handler)
+        assert_eq!(
+            rewrite_with_prefixes("exec some-unknown-tool", &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn prefix_recursion_bounded() {
+        // Deeply nested self-referential prefix must not stack overflow
+        let prefixes: Vec<&str> = vec!["wrap"];
+        let mut cmd = String::new();
+        for _ in 0..(MAX_PREFIX_DEPTH + 2) {
+            cmd.push_str("wrap ");
+        }
+        cmd.push_str("git status");
+        // Should return None (depth exceeded) or Some — but must not panic
+        let _ = rewrite_with_prefixes(&cmd, &prefixes);
+    }
+
+    #[test]
+    fn normalize_transparent_prefixes_sorts_longest_first() {
+        let input: Vec<String> = vec![
+            "docker".to_string(),
+            "docker exec mycontainer".to_string(),
+            "docker exec".to_string(),
+        ];
+        let out = normalize_transparent_prefixes(&input);
+        assert_eq!(out[0], "docker exec mycontainer", "longest should be first");
+        assert_eq!(out[1], "docker exec");
+        assert_eq!(out[2], "docker");
+    }
+
+    #[test]
+    fn normalize_transparent_prefixes_deduplicates() {
+        let input: Vec<String> = vec!["foo".to_string(), "foo".to_string(), "bar".to_string()];
+        let out = normalize_transparent_prefixes(&input);
+        assert_eq!(out.iter().filter(|s| *s == "bar").count(), 1);
+        assert_eq!(out.iter().filter(|s| *s == "foo").count(), 1);
+    }
+
+    #[test]
+    fn strip_word_prefix_exact_match() {
+        assert_eq!(strip_word_prefix("exec", "exec"), Some(""));
+    }
+
+    #[test]
+    fn strip_word_prefix_with_rest() {
+        assert_eq!(strip_word_prefix("exec git status", "exec"), Some("git status"));
+    }
+
+    #[test]
+    fn strip_word_prefix_no_match() {
+        assert_eq!(strip_word_prefix("executor git status", "exec"), None);
+    }
+
+    #[test]
+    fn strip_word_prefix_partial_no_space() {
+        // "execution" does not match prefix "exec" (no word boundary)
+        assert_eq!(strip_word_prefix("execution", "exec"), None);
     }
 }

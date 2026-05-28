@@ -52,14 +52,37 @@ pub fn load_user_filters() -> UserFiltersFile {
     }
 
     // 2. Try project-local: .panda/filters.toml (from cwd)
+    //
+    // SECURITY: project-local filters come from the git repository and can be committed
+    // by anyone with repo write access. They are BLOCKED unless the user has explicitly
+    // reviewed and trusted them with `panda trust`. If the file changes after trust is
+    // granted (e.g. after git pull), trust is automatically revoked.
     if let Ok(cwd) = std::env::current_dir() {
         let local_path = cwd.join(".panda").join("filters.toml");
-        if let Ok(contents) = std::fs::read_to_string(&local_path) {
-            if let Ok(parsed) = toml::from_str::<UserFiltersFile>(&contents) {
-                for (k, v) in parsed.commands {
-                    // Project-local overrides global
-                    merged.commands.insert(k, v);
+        if local_path.exists() {
+            match crate::filter_trust::check_trust(&local_path) {
+                crate::filter_trust::TrustStatus::Trusted => {
+                    if let Ok(contents) = std::fs::read_to_string(&local_path) {
+                        if let Ok(parsed) = toml::from_str::<UserFiltersFile>(&contents) {
+                            for (k, v) in parsed.commands {
+                                merged.commands.insert(k, v);
+                            }
+                        }
+                    }
                 }
+                crate::filter_trust::TrustStatus::Untrusted => {
+                    let msg = "[panda] SECURITY: untrusted project filters at .panda/filters.toml — NOT applied. Run `panda trust` to review and enable.".to_string();
+                    eprintln!("{}", msg);
+                    crate::filter_trust::push_warning(msg);
+                }
+                crate::filter_trust::TrustStatus::HashChanged { .. } => {
+                    let msg = "[panda] SECURITY: .panda/filters.toml has changed since last trust — filters REVOKED. Run `panda trust` to re-review.".to_string();
+                    eprintln!("{}", msg);
+                    crate::filter_trust::push_warning(msg);
+                    // Auto-revoke: the file changed, trust is no longer valid.
+                    let _ = crate::filter_trust::revoke_trust(&local_path);
+                }
+                crate::filter_trust::TrustStatus::NoFile => {} // disappeared between exists() check and read
             }
         }
     }

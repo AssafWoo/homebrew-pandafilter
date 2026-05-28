@@ -1,0 +1,22 @@
+# Tests python -m mypy dispatch: PythonHandler must delegate to MypyHandler
+command_hint = "python -m mypy src/"
+
+[[questions]]
+question = "How many errors did mypy find?"
+key_facts = ["39"]
+
+[[questions]]
+question = "How many files were checked?"
+key_facts = ["12"]
+
+[[questions]]
+question = "What error is on line 12 of jwt.py?"
+key_facts = ["decode", "bytes", "str", "arg-type"]
+
+[[questions]]
+question = "Which module could not be found in routes.py?"
+key_facts = ["flask_jwt"]
+
+[[questions]]
+question = "Which file has a missing return statement error?"
+key_facts = ["user.py", "routes.py"]

@@ -209,6 +209,13 @@ fn filter_run_script(output: &str) -> String {
         return cleaned.join("\n");
     }
 
+    // If the output looks like linter output (majority of lines are diagnostics),
+    // apply dedicated lint filtering instead of generic npm boilerplate stripping.
+    let joined = cleaned.join("\n");
+    if looks_like_lint_output(&joined) {
+        return filter_lint_passthrough(&joined);
+    }
+
     let mut important: Vec<String> = cleaned
         .iter()
         .filter(|l| {
@@ -233,6 +240,140 @@ fn filter_run_script(output: &str) -> String {
     important.extend(tail);
     important.dedup();
     important.join("\n")
+}
+
+/// Heuristic: ≥30% of non-blank lines look like linter diagnostics or file path headers.
+///
+/// Covers:
+/// - Inline format: `path/file.ts:10:5: message`  (ruff, mypy, golangci-lint)
+/// - Per-file-group: ESLint / TSC where file path is on its own line, then indented `10:5  error`
+fn looks_like_lint_output(output: &str) -> bool {
+    let lines: Vec<&str> = output.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.len() < 5 {
+        return false;
+    }
+    let lint_count = lines.iter()
+        .filter(|l| is_diagnostic_line(l) || is_file_path_header(l.trim()))
+        .count();
+    lint_count * 100 / lines.len() >= 30
+}
+
+fn is_diagnostic_line(line: &str) -> bool {
+    let t = line.trim();
+
+    // ESLint per-file-group format: "  10:5   error   message"
+    // These lines are indented; after trimming they start with digits:digits.
+    {
+        let without_digits = t.trim_start_matches(|c: char| c.is_ascii_digit());
+        if without_digits.len() < t.len() && without_digits.starts_with(':') {
+            let after_colon = &without_digits[1..];
+            if after_colon.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                return true;
+            }
+        }
+    }
+
+    // path/to/file.ext:line:col or path/to/file.ext(line,col)
+    // Match: non-whitespace chars, a dot, word chars, then colon+digits or paren+digits
+    let bytes = t.as_bytes();
+    let mut i = 0;
+    let len = bytes.len();
+    while i < len {
+        if bytes[i] == b'.' {
+            let ext_start = i + 1;
+            let mut ext_end = ext_start;
+            while ext_end < len && bytes[ext_end].is_ascii_alphabetic() {
+                ext_end += 1;
+            }
+            let ext_len = ext_end - ext_start;
+            if ext_len >= 1 && ext_len <= 6 && ext_end < len {
+                let after = bytes[ext_end];
+                if after == b':' || after == b'(' {
+                    if ext_end + 1 < len && bytes[ext_end + 1].is_ascii_digit() {
+                        return true;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// True for lines that are standalone file path headers (ESLint per-file-group format).
+/// Example: "/Users/dev/project/src/components/Button.tsx"
+fn is_file_path_header(line: &str) -> bool {
+    let t = line.trim();
+    // Must contain a path separator (absolute or relative path)
+    if !t.contains('/') && !t.contains('\\') {
+        return false;
+    }
+    // Must end with a recognized file extension (2–6 alpha chars after last dot)
+    if let Some(dot_pos) = t.rfind('.') {
+        let ext = &t[dot_pos + 1..];
+        if ext.len() >= 2 && ext.len() <= 6 && ext.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Keep only error/warning/note diagnostic lines and the summary line.
+/// Used when `npm run lint` wraps an actual linter.
+fn filter_lint_passthrough(output: &str) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut total = 0usize;
+    let mut last_file_header: Option<&str> = None;
+
+    for line in output.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        total += 1;
+        let lower = t.to_lowercase();
+
+        // Track file path headers (ESLint per-file-group format).
+        // Emit them lazily — only if a diagnostic follows in the same block.
+        if is_file_path_header(t) {
+            last_file_header = Some(line);
+            continue;
+        }
+
+        let is_diag = is_diagnostic_line(t)
+            || lower.contains("error")
+            || lower.contains("warning")
+            || lower.contains("problem")
+            || lower.contains("✖")
+            || lower.contains("✗")
+            || lower.contains("✕");
+
+        if is_diag {
+            // Flush the pending file path header before the first diagnostic from this file.
+            if let Some(header) = last_file_header.take() {
+                kept.push(header);
+            }
+            kept.push(line);
+        } else {
+            // Non-diagnostic line resets the pending header (new section boundary).
+            last_file_header = None;
+        }
+    }
+
+    if kept.is_empty() {
+        return output.to_string();
+    }
+
+    // Cap at 60 diagnostic lines; append summary of what was trimmed
+    let cap = 60;
+    let extra = kept.len().saturating_sub(cap);
+    kept.truncate(cap);
+    let mut result = kept.join("\n");
+    if extra > 0 {
+        result.push_str(&format!("\n[+{} more diagnostics]", extra));
+    }
+    result.push_str(&format!("\n[{} lines of linter output]", total));
+    result
 }
 
 #[cfg(test)]
@@ -319,5 +460,31 @@ added 123 packages in 4.2s";
         assert!(!result.contains("> my-app@1.0.0 build"), "lifecycle header should be stripped");
         // Should mention the success line
         assert!(result.contains("Build complete"), "important lines should be kept");
+    }
+
+    #[test]
+    fn lint_output_detected_and_filtered() {
+        // Simulate `npm run lint` wrapping eslint output
+        let mut lines: Vec<String> = vec!["> my-app@1.0.0 lint".to_string()];
+        for i in 1..=30 {
+            lines.push(format!("src/components/Button.tsx:{}:5: error  no-unused-vars", i));
+        }
+        lines.push("✖ 30 problems (30 errors, 0 warnings)".to_string());
+        let output = lines.join("\n");
+        let result = filter_run_script(&output);
+        // Should detect as lint and keep error lines + summary
+        assert!(result.contains("Button.tsx"), "diagnostic lines should be kept");
+        assert!(result.contains("✖"), "summary line should be kept");
+        // Should contain total count annotation
+        assert!(result.contains("linter output"), "lint annotation should be appended");
+    }
+
+    #[test]
+    fn is_diagnostic_line_matches_common_patterns() {
+        assert!(is_diagnostic_line("src/index.ts:10:5: error  no-unused-vars"));
+        assert!(is_diagnostic_line("src/auth/jwt.rs:23:4: warning: unused variable"));
+        assert!(is_diagnostic_line("lib/foo.js(42,7): error TS2304: Cannot find name"));
+        assert!(!is_diagnostic_line("Building module 1"));
+        assert!(!is_diagnostic_line("added 42 packages in 2.5s"));
     }
 }

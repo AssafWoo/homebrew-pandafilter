@@ -1,0 +1,70 @@
+
+> my-project@2.3.1 lint
+> eslint src/ --ext .ts,.tsx
+
+/Users/dev/project/src/components/Button.tsx
+  10:5   error    'React' must be in scope when using JSX                react/react-in-jsx-scope
+  23:12  warning  'className' is defined but never used                 no-unused-vars
+  41:3   error    Expected '===' and instead saw '=='                    eqeqeq
+  67:8   error    'useEffect' is not defined                             no-undef
+  89:1   error    Missing semicolon                                      semi
+
+/Users/dev/project/src/components/Modal.tsx
+  8:1    error    'React' must be in scope when using JSX                react/react-in-jsx-scope
+  19:14  warning  'isOpen' is defined but never used                    no-unused-vars
+  34:7   error    Expected '===' and instead saw '=='                    eqeqeq
+  52:3   error    'useState' is not defined                              no-undef
+  71:9   warning  Unnecessary semicolon                                  no-extra-semi
+  88:5   error    Function 'handleClose' has no return type annotation   @typescript-eslint/explicit-function-return-type
+
+/Users/dev/project/src/utils/api.ts
+  5:1    error    'axios' is defined but never used                      no-unused-vars
+  18:8   error    Unexpected any. Specify a different type               @typescript-eslint/no-explicit-any
+  29:12  warning  Prefer const assertion over type annotation            @typescript-eslint/prefer-as-const
+  43:3   error    Expected '===' and instead saw '=='                    eqeqeq
+  57:6   error    Promise returned in function argument where a void return was expected  @typescript-eslint/no-floating-promises
+  71:1   warning  Trailing spaces                                        no-trailing-spaces
+  84:9   error    'fetch' is not defined                                 no-undef
+  99:5   error    Async function 'getData' has no await expression       require-await
+
+/Users/dev/project/src/hooks/useAuth.ts
+  7:1    error    'useCallback' is not defined                           no-undef
+  21:14  warning  'token' is assigned a value but never used             no-unused-vars
+  35:3   error    Expected '===' and instead saw '=='                    eqeqeq
+  49:8   error    Unexpected any. Specify a different type               @typescript-eslint/no-explicit-any
+  63:5   error    Missing return type on function                        @typescript-eslint/explicit-function-return-type
+  77:12  warning  Prefer nullish coalescing operator over ||             @typescript-eslint/prefer-nullish-coalescing
+  91:3   error    'localStorage' is not defined                          no-undef
+  105:9  error    'useEffect' is not defined                             no-undef
+
+/Users/dev/project/src/pages/Dashboard.tsx
+  12:1   error    'React' must be in scope when using JSX                react/react-in-jsx-scope
+  25:8   warning  'data' is defined but never used                       no-unused-vars
+  39:3   error    Expected '===' and instead saw '=='                    eqeqeq
+  53:7   error    'useState' is not defined                              no-undef
+  67:5   error    'useEffect' is not defined                             no-undef
+  81:12  error    Unexpected any. Specify a different type               @typescript-eslint/no-explicit-any
+  95:9   warning  Unnecessary semicolon                                  no-extra-semi
+  109:3  error    Missing semicolon                                      semi
+
+/Users/dev/project/src/pages/Login.tsx
+  6:1    error    'React' must be in scope when using JSX                react/react-in-jsx-scope
+  18:14  warning  'error' is defined but never used                      no-unused-vars
+  31:7   error    Expected '===' and instead saw '=='                    eqeqeq
+  45:3   error    'useState' is not defined                              no-undef
+  59:8   error    Unexpected any. Specify a different type               @typescript-eslint/no-explicit-any
+  73:5   error    Missing semicolon                                      semi
+  87:12  warning  Trailing spaces                                        no-trailing-spaces
+  101:9  error    Promise returned in function argument where a void return was expected  @typescript-eslint/no-floating-promises
+
+/Users/dev/project/src/store/authSlice.ts
+  4:1    error    'createSlice' is not defined                           no-undef
+  17:8   warning  'initialState' is defined but never used               no-unused-vars
+  31:3   error    Expected '===' and instead saw '=='                    eqeqeq
+  45:6   error    Unexpected any. Specify a different type               @typescript-eslint/no-explicit-any
+  59:5   error    Missing return type on function                        @typescript-eslint/explicit-function-return-type
+  73:12  error    'PayloadAction' is not defined                         no-undef
+  87:3   warning  Unnecessary semicolon                                  no-extra-semi
+
+✖ 54 problems (39 errors, 15 warnings)
+  39 errors and 0 warnings potentially fixable with the `--fix` option.

@@ -1,0 +1,12 @@
+.....F...F....x..s.....F......x....s......                        [100%]
+FAILED tests/auth/test_login.py::test_invalid_credentials - AssertionError: expected 401 got 200
+FAILED tests/auth/test_login.py::test_expired_token - jwt.exceptions.ExpiredSignatureError: Signature has expired
+FAILED tests/api/test_users.py::test_create_duplicate_user - IntegrityError: UNIQUE constraint failed: users.email
+XFAILED tests/db/test_migrations.py::test_backwards_compat - expected failure on legacy schema
+XFAILED tests/db/test_migrations.py::test_unicode_columns - known issue #1234
+XPASSED tests/auth/test_login.py::test_legacy_password_hash - this was broken but appears fixed now
+short test summary info
+FAILED tests/auth/test_login.py::test_invalid_credentials - AssertionError: expected 401 got 200
+FAILED tests/auth/test_login.py::test_expired_token - jwt.exceptions.ExpiredSignatureError
+FAILED tests/api/test_users.py::test_create_duplicate_user - IntegrityError
+3 failed, 45 passed, 2 xfailed, 1 xpassed, 2 skipped in 12.34s

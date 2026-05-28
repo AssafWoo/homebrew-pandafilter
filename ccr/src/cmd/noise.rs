@@ -3,7 +3,25 @@
 use anyhow::Result;
 use crate::noise_learner::{NoiseStore, noise_path};
 
-pub fn run(reset: bool) -> Result<()> {
+pub fn run(reset: bool, clean_room: bool) -> Result<()> {
+    if clean_room {
+        println!("Clean-room mode: bypass all learned state without deleting it.");
+        println!();
+        println!("Set this environment variable before starting Claude Code:");
+        println!();
+        println!("  export PANDA_CLEAN_ROOM=1");
+        println!();
+        println!("When active, PandaFilter skips:");
+        println!("  • Learned noise patterns (project-specific pre-filters)");
+        println!("  • Session delta / deduplication");
+        println!("  • Result cache (every run is evaluated fresh)");
+        println!("  • Cross-command dedup");
+        println!("  • Session-derived compression pressure");
+        println!();
+        println!("Patterns are NOT deleted — unset the variable to resume normal mode.");
+        println!("To permanently reset patterns for this project: panda noise --reset");
+        return Ok(());
+    }
     let key = crate::util::project_key()
         .ok_or_else(|| anyhow::anyhow!("Cannot determine project key"))?;
 

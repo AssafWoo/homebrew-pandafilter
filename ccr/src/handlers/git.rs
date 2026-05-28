@@ -107,8 +107,16 @@ impl Handler for GitHandler {
 // ─── status ──────────────────────────────────────────────────────────────────
 
 fn filter_status(output: &str) -> String {
+    // Detect in-progress git operations from .git/ marker files.
+    // Porcelain output omits this state info, so we source it from the filesystem.
+    let in_progress = crate::handlers::util::detect_git_in_progress(output);
+
     if output.contains("nothing to commit") || output.trim().is_empty() {
-        return "nothing to commit, working tree clean".to_string();
+        let body = "nothing to commit, working tree clean".to_string();
+        return match in_progress {
+            Some(state) => format!("{}\n{}", state.summary(), body),
+            None => body,
+        };
     }
 
     let mut staged: Vec<String> = Vec::new();
@@ -150,7 +158,11 @@ fn filter_status(output: &str) -> String {
     }
 
     if staged.is_empty() && modified.is_empty() && untracked.is_empty() {
-        return "nothing to commit, working tree clean".to_string();
+        let body = "nothing to commit, working tree clean".to_string();
+        return match in_progress {
+            Some(state) => format!("{}\n{}", state.summary(), body),
+            None => body,
+        };
     }
 
     let mut out: Vec<String> = Vec::new();
@@ -183,7 +195,11 @@ fn filter_status(output: &str) -> String {
         out.push(format!("[+{} more untracked]", ut_extra));
     }
 
-    out.join("\n")
+    let body = out.join("\n");
+    match in_progress {
+        Some(state) => format!("{}\n{}", state.summary(), body),
+        None => body,
+    }
 }
 
 // ─── log ─────────────────────────────────────────────────────────────────────
@@ -194,14 +210,22 @@ const TRAILERS: &[&str] = &[
     "Acked-by:", "Tested-by:", "Reported-by:", "Cc:",
 ];
 
+fn log_line_cap() -> usize {
+    crate::config_loader::load_config()
+        .map(|c| c.global.git_log_limit)
+        .unwrap_or(25)
+}
+
 fn filter_log(output: &str) -> String {
+    let cap = log_line_cap();
+
     let lines: Vec<&str> = output
         .lines()
         .filter(|l| {
             let msg = l.splitn(2, ' ').nth(1).unwrap_or("");
             !TRAILERS.iter().any(|t| msg.trim_start().starts_with(t))
         })
-        .take(50)
+        .take(cap)
         .collect();
 
     let total = output.lines().count();
@@ -217,8 +241,8 @@ fn filter_log(output: &str) -> String {
         })
         .collect();
 
-    if total > 50 {
-        result.push(format!("[+{} more commits, {} total]", total - 50, total));
+    if total > cap {
+        result.push(format!("[+{} more commits, {} total]", total - cap, total));
     }
     result.join("\n")
 }
@@ -1005,6 +1029,22 @@ mod tests {
         assert!(result.contains("fix: real commit"), "real commit should remain");
         assert!(!result.contains("Signed-off-by"), "trailer commits should be stripped");
         assert!(!result.contains("Co-authored-by"), "trailer commits should be stripped");
+    }
+
+    #[test]
+    fn test_log_caps_at_configured_limit() {
+        let cap = log_line_cap();
+        let input_count = cap + 15;
+        let mut lines: Vec<String> = Vec::new();
+        for i in 0..input_count {
+            lines.push(format!("abc{:04} commit message {}", i, i));
+        }
+        let output = lines.join("\n");
+        let result = filter_log(&output);
+        let result_lines: Vec<&str> = result.lines().collect();
+        assert_eq!(result_lines.len(), cap + 1, "expected {} lines, got: {}", cap + 1, result_lines.len());
+        assert!(result_lines.last().unwrap().contains(&format!("{} total", input_count)),
+            "should show overflow: {}", result_lines.last().unwrap());
     }
 
     #[test]
