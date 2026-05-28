@@ -9,8 +9,8 @@ question = "What commit fixed the race condition in auth token refresh?"
 key_facts = ["a3f9c21"]
 
 [[questions]]
-question = "What hash added the prometheus metrics endpoint?"
-key_facts = ["d8b2e05"]
+question = "What commit added support for OAuth2 PKCE flow?"
+key_facts = ["b9d2f1e"]
 
 [[questions]]
 question = "How many total commits are shown in the log?"

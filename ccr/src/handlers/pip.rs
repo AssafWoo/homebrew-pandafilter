@@ -121,7 +121,7 @@ fn filter_pip_list(output: &str) -> String {
     let trimmed = output.trim();
     if trimmed.starts_with('[') {
         if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(trimmed) {
-            let cap = 50usize;
+            let cap = 200usize;
             let total = arr.len();
             let mut pkgs: Vec<String> = arr.iter().take(cap).filter_map(|v| {
                 let name = v.get("name")?.as_str()?;
@@ -137,8 +137,14 @@ fn filter_pip_list(output: &str) -> String {
             if total > cap {
                 pkgs.push(format!("[+{} more packages]", total - cap));
             }
-            pkgs.push(format!("[{} packages total]", total));
-            return pkgs.join("\n");
+
+            // Emit packages 8 per line (compact but still searchable)
+            let header = format!("[{} packages installed]", total);
+            let mut lines: Vec<String> = vec![header];
+            for chunk in pkgs.chunks(8) {
+                lines.push(chunk.join(", "));
+            }
+            return lines.join("\n");
         }
     }
 

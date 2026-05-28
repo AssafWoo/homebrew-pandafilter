@@ -6,7 +6,7 @@ key_facts = ["64"]
 
 [[questions]]
 question = "How many E711 violations (comparison to None) were found?"
-key_facts = ["E711", "×", "10", "11", "12"]
+key_facts = ["E711", "×", "13"]
 
 [[questions]]
 question = "What unused import was found in routes.py?"
