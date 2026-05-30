@@ -196,7 +196,12 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     // this threshold prevents that regression. Raised to 800 to also bypass the
     // 500-800 char range where pipeline overhead still exceeds compression benefit.
     const BYPASS_CHARS: usize = 800;
-    if output_text.len() < BYPASS_CHARS {
+    // Compiler-error outputs must always be processed regardless of size so that
+    // error-loop detection can record and compare signatures across retries.
+    let has_compiler_errors = output_text.contains("error[E")
+        || output_text.contains("error[W")
+        || output_text.contains("error TS");
+    if output_text.len() < BYPASS_CHARS && !has_compiler_errors {
         return Ok(None);
     }
 
