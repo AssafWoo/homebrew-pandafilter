@@ -43,7 +43,7 @@ pub struct SessionEntry {
     pub error_signatures: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct SessionState {
     pub entries: Vec<SessionEntry>,
     /// Total tool-use turns seen in this session.

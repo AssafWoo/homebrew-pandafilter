@@ -71,6 +71,14 @@ pub trait Handler: Send + Sync {
 
     /// Filter the combined stdout+stderr output into a compact representation.
     fn filter(&self, output: &str, args: &[String]) -> String;
+
+    /// When true, BERT summarization is skipped after handler compression.
+    /// Use for handlers that produce fully-structured output (directory trees,
+    /// test JSON) where BERT may corrupt the structure rather than improve it.
+    /// Default: false (BERT runs normally based on size/compression thresholds).
+    fn skip_bert(&self) -> bool {
+        false
+    }
 }
 
 /// Returns a handler for the given command name.

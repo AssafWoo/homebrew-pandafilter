@@ -196,7 +196,12 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     // this threshold prevents that regression. Raised to 800 to also bypass the
     // 500-800 char range where pipeline overhead still exceeds compression benefit.
     const BYPASS_CHARS: usize = 800;
-    if output_text.len() < BYPASS_CHARS {
+    // Compiler-error outputs must always be processed regardless of size so that
+    // error-loop detection can record and compare signatures across retries.
+    let has_compiler_errors = output_text.contains("error[E")
+        || output_text.contains("error[W")
+        || output_text.contains("error TS");
+    if output_text.len() < BYPASS_CHARS && !has_compiler_errors {
         return Ok(None);
     }
 
@@ -277,6 +282,17 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         };
         real_iter.take(2).collect::<Vec<_>>().join(" ")
     };
+
+    // P5: Trivial git staging/navigation commands (git add, git rm, etc.) only produce
+    // output on error. Skip the entire pipeline when the output has no error signals —
+    // compression and session recording provide zero benefit for these commands.
+    if is_trivial_cmd(&cmd_key)
+        && !output_text.contains("error")
+        && !output_text.contains("Error")
+        && !output_text.contains("fatal")
+    {
+        return Ok(None);
+    }
 
     // Fix 1+2: Polling suppressor with timestamp-normalized embeddings.
     // If the same command ran within the last 120 seconds, embed a
@@ -440,7 +456,16 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     // meaningless — they would record state but produce zero compression benefit.
     let first_turn = session.entries.is_empty();
 
-    let skip_bert = clean_room || handler_fast_path || soft_bypass || first_turn;
+    // P6: Handler-level BERT opt-out. Handlers that produce fully-structured output
+    // (directory trees, test result tables) declare skip_bert()=true because BERT
+    // summarization may corrupt their structure rather than improve it.
+    let handler_says_skip = command_hint
+        .as_deref()
+        .and_then(|h| crate::handlers::get_handler(h))
+        .map(|h| h.skip_bert())
+        .unwrap_or(false);
+
+    let skip_bert = clean_room || handler_fast_path || soft_bypass || first_turn || handler_says_skip;
 
     let mut final_output = if skip_bert {
         // Fast path: use handler output directly, skip all BERT-based passes.
@@ -1323,6 +1348,23 @@ fn now_secs() -> u64 {
 /// Any output attributed to them is compound-command stdout leakage.
 fn is_no_output_cmd(cmd: &str) -> bool {
     matches!(cmd, "sleep" | "wait" | "true" | "false" | ":")
+}
+
+/// Git staging/navigation subcommands whose output (if any) is never
+/// meaningful to compress — "git add" only prints anything on error.
+/// Checked against the full `cmd_key` (e.g. "git add", "git rm").
+fn is_trivial_cmd(cmd_key: &str) -> bool {
+    matches!(
+        cmd_key,
+        "git add"
+            | "git rm"
+            | "git mv"
+            | "git restore"
+            | "git stash"
+            | "git checkout"
+            | "git switch"
+            | "git reset"
+    )
 }
 
 // ── Fix 2: timestamp/counter normalization for polling dedup ─────────────────

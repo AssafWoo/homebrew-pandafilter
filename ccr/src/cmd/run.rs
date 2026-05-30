@@ -162,6 +162,9 @@ pub fn run(args: Vec<String>) -> Result<()> {
 
     // Idea 3: Delta compression — suppress lines seen in a prior run of the same command.
     // Skip for short outputs (< 20 lines) where delta overhead exceeds savings.
+    // When delta doesn't fire, preserve the embedding for reuse in the session dedup pass
+    // below — avoids a second identical embed_batch call on the same text (~200-400ms).
+    let mut reusable_emb: Option<Vec<f32>> = None;
     let filtered = if is_content_retrieval {
         filtered
     } else if filtered.lines().count() >= 20 {
@@ -171,8 +174,11 @@ pub fn run(args: Vec<String>) -> Result<()> {
                 let session_pre = crate::session::SessionState::load(&sid_pre);
                 let lines: Vec<&str> = filtered.lines().collect();
                 match session_pre.compute_delta(&delta_key, &lines, &emb) {
-                    Some(delta) => delta.output,
-                    None => filtered,
+                    Some(delta) => delta.output, // delta fired → text changed, can't reuse emb
+                    None => {
+                        reusable_emb = Some(emb); // delta didn't fire → reuse below
+                        filtered
+                    }
                 }
             } else {
                 filtered
@@ -196,23 +202,32 @@ pub fn run(args: Vec<String>) -> Result<()> {
     // B3: Session cache — check for semantically identical prior output, record new one.
     // Skip for short outputs: the dedup message itself would be longer than the original.
     // Skip for content-retrieval subcommands: annotations must not appear in raw content.
+    // Reuse embedding from delta pass when available (avoids redundant embed_batch call).
     let sid = crate::session::session_id();
     let mut session = crate::session::SessionState::load(&sid);
     let filtered = if is_content_retrieval {
         filtered
     } else if panda_core::tokens::count_tokens(&filtered) < 30 {
         let tokens = panda_core::tokens::count_tokens(&filtered);
-        if let Ok(mut embs) = panda_core::summarizer::embed_batch(&[filtered.as_str()]) {
-            if let Some(emb) = embs.pop() {
-                session.record(&delta_key, emb, tokens, &filtered, is_state, None);
-                session.save(&sid);
-            }
+        let emb_opt = reusable_emb.take().or_else(|| {
+            panda_core::summarizer::embed_batch(&[filtered.as_str()])
+                .ok()
+                .and_then(|mut v| v.pop())
+        });
+        if let Some(emb) = emb_opt {
+            session.record(&delta_key, emb, tokens, &filtered, is_state, None);
+            let sid_bg = sid.clone();
+            let session_bg = session.clone();
+            std::thread::spawn(move || { session_bg.save(&sid_bg); });
         }
         filtered
-    } else if let Ok(mut embeddings) =
-        panda_core::summarizer::embed_batch(&[filtered.as_str()])
-    {
-        if let Some(emb) = embeddings.pop() {
+    } else {
+        let emb_opt = reusable_emb.take().or_else(|| {
+            panda_core::summarizer::embed_batch(&[filtered.as_str()])
+                .ok()
+                .and_then(|mut v| v.pop())
+        });
+        if let Some(emb) = emb_opt {
             // State commands (git, kubectl, etc.) use exact-content dedup:
             // two different git states can embed at >0.92 similarity while the
             // actual output has changed. Semantic dedup is only safe for
@@ -231,14 +246,14 @@ pub fn run(args: Vec<String>) -> Result<()> {
             } else {
                 let tokens = panda_core::tokens::count_tokens(&filtered);
                 session.record(&delta_key, emb, tokens, &filtered, is_state, None);
-                session.save(&sid);
+                let sid_bg = sid.clone();
+                let session_bg = session.clone();
+                std::thread::spawn(move || { session_bg.save(&sid_bg); });
                 filtered
             }
         } else {
             filtered
         }
-    } else {
-        filtered
     };
 
     // PC: write-through — store the filtered result for future cache hits.
@@ -247,7 +262,8 @@ pub fn run(args: Vec<String>) -> Result<()> {
         let mut pc = crate::pre_cache::PreCache::load(&crate::session::session_id());
         pc.evict_old();
         pc.insert(pck.clone(), &filtered, tokens_for_cache);
-        pc.save(&crate::session::session_id());
+        let sid_pc = crate::session::session_id();
+        std::thread::spawn(move || { pc.save(&sid_pc); });
     }
 
     // Compute analytics

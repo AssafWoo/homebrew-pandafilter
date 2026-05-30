@@ -43,7 +43,7 @@ pub struct PreCacheEntry {
     pub tokens: usize,
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct PreCache {
     entries: HashMap<String, PreCacheEntry>,
 }
