@@ -1,0 +1,29 @@
+command_hint = "cargo nextest run"
+
+[[questions]]
+question = "How many tests passed?"
+key_facts = ["23"]
+
+[[questions]]
+question = "How many tests failed?"
+key_facts = ["2"]
+
+[[questions]]
+question = "How many total tests were run?"
+key_facts = ["25"]
+
+[[questions]]
+question = "Which two tests failed?"
+key_facts = ["test_create_charge_idempotent", "test_webhook_signature_verification"]
+
+[[questions]]
+question = "What package did the failing tests belong to?"
+key_facts = ["webapp-payments", "payments"]
+
+[[questions]]
+question = "What was the error in the idempotency test?"
+key_facts = ["idempotency key", "original charge", "ch_duplicate", "ch_original"]
+
+[[questions]]
+question = "What was the error in the webhook signature test?"
+key_facts = ["timestamp tolerance", "signature", "300s", "312s"]

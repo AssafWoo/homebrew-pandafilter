@@ -8,7 +8,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use panda_core::embed_client;
 
-const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 900; // 15 minutes
+// 8 hours — covers a full work session so the daemon stays warm across all
+// Claude Code invocations during the day without burning resources overnight.
+// Override with PANDA_NO_IDLE_EXIT=1 to disable idle-exit entirely (the OS
+// will reclaim the process on logout / shutdown instead).
+const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 28800; // 8 hours
 
 #[derive(clap::Subcommand)]
 pub enum DaemonAction {
@@ -218,8 +222,16 @@ fn daemon_main(sock_path: PathBuf, pid_path: PathBuf) -> Result<()> {
     };
 
     // Idle timeout watchdog — sends SIGTERM to self to unblock poll().
+    // Set PANDA_NO_IDLE_EXIT=1 to disable idle-exit entirely; the daemon will
+    // then run until the OS kills it (e.g. on logout or reboot).
+    let no_idle_exit = std::env::var_os("PANDA_NO_IDLE_EXIT")
+        .map(|v| v == "1")
+        .unwrap_or(false);
     let lr = last_request.clone();
     std::thread::spawn(move || {
+        if no_idle_exit {
+            return;
+        }
         loop {
             std::thread::sleep(Duration::from_secs(30));
             let idle = now_secs().saturating_sub(lr.load(Ordering::Relaxed));
@@ -305,6 +317,11 @@ fn handle_connection(mut stream: std::os::unix::net::UnixStream) {
 
 fn process_request(req_buf: &[u8]) -> Result<serde_json::Value> {
     let req: serde_json::Value = serde_json::from_slice(req_buf)?;
+
+    // Health-check ping — lightweight round-trip to verify daemon is alive and responsive.
+    if req.get("ping").and_then(|v| v.as_bool()) == Some(true) {
+        return Ok(serde_json::json!({"ok": true, "pong": true}));
+    }
 
     let texts: Vec<String> = req
         .get("texts")
@@ -429,4 +446,26 @@ fn status() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_request_ping_returns_pong() {
+        let req = serde_json::json!({"ping": true});
+        let req_bytes = serde_json::to_vec(&req).unwrap();
+        let resp = process_request(&req_bytes).unwrap();
+        assert_eq!(resp.get("ok").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(resp.get("pong").and_then(|v| v.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn process_request_empty_texts_returns_ok() {
+        let req = serde_json::json!({"texts": []});
+        let req_bytes = serde_json::to_vec(&req).unwrap();
+        let resp = process_request(&req_bytes).unwrap();
+        assert_eq!(resp.get("ok").and_then(|v| v.as_bool()), Some(true));
+    }
 }

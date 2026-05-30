@@ -23,7 +23,7 @@ fn re_mypy_daemon() -> &'static Regex {
     })
 }
 
-const MAX_ERRORS_PER_FILE: usize = 10;
+const MAX_ERRORS_PER_FILE: usize = 5;
 
 pub struct MypyHandler;
 
@@ -75,6 +75,9 @@ fn filter_mypy(output: &str) -> String {
         }
     }
 
+    let total_errors: usize = file_errors.values().map(|v| v.len()).sum();
+    let total_files = file_errors.len();
+
     let mut out: Vec<String> = Vec::new();
     for (file, errors) in &file_errors {
         out.push(format!("{}:", file));
@@ -83,10 +86,22 @@ fn filter_mypy(output: &str) -> String {
             out.push(e.clone());
         }
         if errors.len() > MAX_ERRORS_PER_FILE {
-            out.push(format!("  [{} more errors in this file]", errors.len() - MAX_ERRORS_PER_FILE));
+            out.push(format!(
+                "  [+{} more in {}]",
+                errors.len() - MAX_ERRORS_PER_FILE,
+                file
+            ));
         }
     }
     out.extend(summary_lines);
+    if total_errors > 0 {
+        out.push(format!("[mypy: {} error{} in {} file{}]",
+            total_errors,
+            if total_errors == 1 { "" } else { "s" },
+            total_files,
+            if total_files == 1 { "" } else { "s" },
+        ));
+    }
     out.join("\n")
 }
 
@@ -103,14 +118,36 @@ mod tests {
 
     #[test]
     fn mypy_caps_errors_per_file() {
+        // 15 errors with a cap of 5 → overflow line should mention 10 more
         let input: String = (1..=15)
             .map(|i| format!("src/app.py:{}: error: Cannot assign to a method [assignment]\n", i))
             .collect();
         let handler = MypyHandler;
         let result = handler.filter(&input, &[]);
-        let more_line = result.lines().find(|l| l.contains("more errors"));
-        assert!(more_line.is_some(), "no 'more errors' line for >10 errors");
-        assert!(more_line.unwrap().contains("5"), "wrong count in 'more errors'");
+        // New format: "[+N more in filename.py]"
+        let more_line = result.lines().find(|l| l.contains("+") && l.contains("more in"));
+        assert!(more_line.is_some(), "no overflow line for >5 errors, got:\n{}", result);
+        assert!(more_line.unwrap().contains("10"), "overflow count should be 10, got:\n{}", result);
+    }
+
+    #[test]
+    fn mypy_cap_at_5_with_8_errors() {
+        // 8 errors in one file → show 5 + "[+3 more in ...]"
+        let input: String = (1..=8)
+            .map(|i| format!("myapp/auth.py:{}: error: Type error [misc]\n", i))
+            .collect();
+        let handler = MypyHandler;
+        let result = handler.filter(&input, &[]);
+        // Exactly 5 error lines shown under the file header
+        let error_lines: Vec<&str> = result
+            .lines()
+            .filter(|l| l.trim().starts_with("line "))
+            .collect();
+        assert_eq!(error_lines.len(), 5, "should show exactly 5 errors, got:\n{}", result);
+        // One overflow line
+        let more_line = result.lines().find(|l| l.contains("+3 more in"));
+        assert!(more_line.is_some(), "expected '[+3 more in myapp/auth.py]', got:\n{}", result);
+        assert!(more_line.unwrap().contains("myapp/auth.py"), "overflow line should name the file");
     }
 
     #[test]

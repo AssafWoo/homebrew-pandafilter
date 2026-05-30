@@ -195,6 +195,19 @@ fn filter_test(output: &str) -> String {
 }
 
 fn filter_run_script(output: &str) -> String {
+    // Detect test runner JSON output (vitest --reporter=json or jest --json) before stripping
+    if let Some(compact) = super::util::parse_js_test_json(output) {
+        return compact;
+    }
+    // Detect vitest verbose text output
+    if output.contains("Test Files") && (output.contains(" passed") || output.contains(" failed")) {
+        return super::util::test_failures(output, "vitest");
+    }
+    // Detect jest text output
+    if output.contains("Test Suites:") && output.contains("Tests:") {
+        return super::util::test_failures(output, "jest");
+    }
+
     // Strip boilerplate and empty lines before processing
     let cleaned: Vec<&str> = output
         .lines()

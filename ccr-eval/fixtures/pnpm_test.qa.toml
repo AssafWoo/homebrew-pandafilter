@@ -1,0 +1,33 @@
+command_hint = "pnpm run test"
+
+[[questions]]
+question = "How many tests passed?"
+key_facts = ["28"]
+
+[[questions]]
+question = "How many tests failed?"
+key_facts = ["2"]
+
+[[questions]]
+question = "How many total tests were run?"
+key_facts = ["30"]
+
+[[questions]]
+question = "How many test files passed and how many failed?"
+key_facts = ["3 passed", "2 failed"]
+
+[[questions]]
+question = "Which payments test failed?"
+key_facts = ["createRefund", "reverses the charge amount"]
+
+[[questions]]
+question = "What error occurred in the payments test failure?"
+key_facts = ["AssertionError", "amount_reversed", "refund_status"]
+
+[[questions]]
+question = "Which settings test failed?"
+key_facts = ["updateOrgSettings", "persists plan change"]
+
+[[questions]]
+question = "What error occurred in the settings test failure?"
+key_facts = ["TypeError", "stripe_subscription_id", "undefined"]

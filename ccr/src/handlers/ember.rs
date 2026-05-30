@@ -66,46 +66,114 @@ fn filter_build(output: &str) -> String {
 }
 
 fn filter_test(output: &str) -> String {
-    let mut failures: Vec<String> = Vec::new();
-    let mut summary: Option<String> = None;
+    // Parse counters from TAP summary lines: "# tests N", "# pass N", "# fail N"
+    let mut total_count: Option<u32> = None;
+    let mut pass_count: Option<u32> = None;
+    let mut fail_count: Option<u32> = None;
 
-    for line in output.lines() {
+    // Also detect the plan line "1..N" for total
+    let lines: Vec<&str> = output.lines().collect();
+
+    for line in &lines {
         let t = line.trim();
-        if t.is_empty() {
+        if let Some(rest) = t.strip_prefix("1..") {
+            if let Ok(n) = rest.trim().parse::<u32>() {
+                total_count = Some(n);
+            }
             continue;
         }
-        // TAP-style passing lines ("ok N - description") — drop
-        if t.starts_with("ok ") && !t.starts_with("ok 0") {
-            continue;
-        }
-        // Summary lines: "X passed, Y failed" or "# X tests"
-        if (t.contains("passed") || t.contains("failed"))
-            && (t.contains(',') || t.starts_with("# ") || t.starts_with("1.."))
-        {
-            summary = Some(line.to_string());
-            continue;
-        }
-        // Failing test lines
-        if t.starts_with("not ok")
-            || t.contains("FAILED")
-            || t.contains("AssertionError")
-            || (t.contains("Error:") && !t.contains("error TS"))
-        {
-            failures.push(line.to_string());
+        if t.starts_with("# ") {
+            let inner = t[2..].trim();
+            if let Some(n_str) = inner.strip_prefix("tests ") {
+                if let Ok(n) = n_str.trim().parse::<u32>() {
+                    total_count = Some(n);
+                }
+            } else if let Some(n_str) = inner.strip_prefix("pass ") {
+                if let Ok(n) = n_str.trim().parse::<u32>() {
+                    pass_count = Some(n);
+                }
+            } else if let Some(n_str) = inner.strip_prefix("fail ") {
+                if let Ok(n) = n_str.trim().parse::<u32>() {
+                    fail_count = Some(n);
+                }
+            }
         }
     }
 
-    if failures.is_empty() {
-        if let Some(s) = summary {
-            return s;
+    // Collect failing test blocks (not ok lines + YAML diagnostic blocks)
+    const MAX_FAILURES: usize = 5;
+    const MAX_DIAG_LINES: usize = 8;
+
+    let mut failure_blocks: Vec<String> = Vec::new();
+    let mut i = 0;
+
+    while i < lines.len() {
+        let t = lines[i].trim();
+        if t.starts_with("not ok") {
+            let mut block: Vec<String> = vec![lines[i].to_string()];
+            i += 1;
+            let mut diag_lines = 0;
+            // Consume diagnostic block: lines that are indented or YAML markers
+            while i < lines.len() && diag_lines < MAX_DIAG_LINES {
+                let next = lines[i];
+                let nt = next.trim();
+                // Stop at next test result line or plan line
+                if nt.starts_with("ok ") || nt.starts_with("not ok") || nt.starts_with("1..") {
+                    break;
+                }
+                // Stop at empty line (end of YAML block)
+                if nt.is_empty() {
+                    i += 1;
+                    break;
+                }
+                // Skip bare YAML delimiters but still consume them
+                if nt == "---" || nt == "..." {
+                    i += 1;
+                    diag_lines += 1;
+                    continue;
+                }
+                // Skip TAP summary comment lines inside a block
+                if nt.starts_with("# tests ") || nt.starts_with("# pass ") || nt.starts_with("# fail ") {
+                    break;
+                }
+                block.push(next.to_string());
+                diag_lines += 1;
+                i += 1;
+            }
+            failure_blocks.push(block.join("\n"));
+        } else {
+            i += 1;
         }
-        return "[all tests passed]".to_string();
     }
 
-    let mut out = failures;
-    if let Some(s) = summary {
-        out.push(s);
+    // Build output
+    if failure_blocks.is_empty() {
+        // All passed — emit compact summary
+        return match (pass_count, total_count) {
+            (Some(p), _) => format!("Ember Tests: {} passed", p),
+            (None, Some(t)) => format!("Ember Tests: {} passed", t),
+            _ => "[all tests passed]".to_string(),
+        };
     }
+
+    let total_failures = failure_blocks.len();
+    let shown: Vec<String> = failure_blocks.into_iter().take(MAX_FAILURES).collect();
+    let mut out = shown;
+    if total_failures > MAX_FAILURES {
+        out.push(format!("[+{} more failures]", total_failures - MAX_FAILURES));
+    }
+
+    // Summary line
+    let summary = match (pass_count, fail_count, total_count) {
+        (Some(p), Some(f), Some(t)) => format!("Ember Tests: {}/{} passed, {} failed", p, t, f),
+        (Some(p), Some(f), None) => format!("Ember Tests: {} passed, {} failed", p, f),
+        (Some(p), None, Some(t)) => format!("Ember Tests: {}/{} passed", p, t),
+        _ => String::new(),
+    };
+    if !summary.is_empty() {
+        out.push(summary);
+    }
+
     out.join("\n")
 }
 
@@ -175,35 +243,133 @@ mod tests {
     // ── filter_test ───────────────────────────────────────────────────────────
 
     #[test]
-    fn test_keeps_failing_tests_and_summary() {
-        let output = "ok 1 - MyApp: foo passes\n\
-                      not ok 2 - MyApp: bar fails\n\
-                      # Error: expected true got false\n\
-                      # 1 passed, 1 failed";
-        let result = EmberHandler.filter(output, &args("test"));
-        assert!(result.contains("not ok 2"), "should keep failing test");
-        assert!(!result.contains("ok 1 - MyApp: foo"), "should drop passing test");
-        assert!(result.contains("1 passed, 1 failed"), "should keep summary");
-    }
-
-    #[test]
-    fn test_all_pass_returns_summary() {
-        let output = "ok 1 - MyApp: foo\nok 2 - MyApp: bar\n# 2 passed, 0 failed";
+    fn test_all_pass_tap_format() {
+        let output = "TAP version 13\n\
+                      1..60\n\
+                      ok 1 - auth/login: renders login form\n\
+                      ok 2 - auth/login: validates required fields\n\
+                      ok 3 - auth/register: renders registration form\n\
+                      # tests 3\n\
+                      # pass 3\n\
+                      # fail 0";
         let result = EmberHandler.filter(output, &args("test"));
         assert!(
             result.contains("passed"),
-            "should include pass summary: got {:?}",
+            "should indicate all passed: got {:?}",
+            result
+        );
+        assert!(
+            !result.contains("not ok"),
+            "should not contain any failures: got {:?}",
             result
         );
     }
 
     #[test]
-    fn test_no_output_returns_all_passed() {
+    fn test_all_pass_no_counts_returns_sentinel() {
         let output = "ok 1 - test\nok 2 - test2";
         let result = EmberHandler.filter(output, &args("test"));
+        assert_eq!(
+            result, "[all tests passed]",
+            "should return sentinel when no counts: got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_failing_with_yaml_diagnostic_block() {
+        let output = "\
+TAP version 13
+1..5
+ok 1 - auth/login: renders login form
+ok 2 - auth/login: validates required fields
+not ok 3 - auth/register: sends confirmation email after signup
+  ---
+  message: Expected test to resolve to true, got false
+  severity: failed
+  at:
+    line: 23
+    column: 5
+  ...
+ok 4 - auth/login: redirects on success
+ok 5 - auth/login: shows error on bad password
+# tests 5
+# pass 4
+# fail 1";
+        let result = EmberHandler.filter(output, &args("test"));
+        assert!(result.contains("not ok 3"), "should keep failing test line");
         assert!(
-            result.contains("passed") || result == "[all tests passed]",
-            "should indicate all passed: got {:?}",
+            result.contains("Expected test to resolve to true"),
+            "should include YAML diagnostic message: got {:?}",
+            result
+        );
+        assert!(
+            !result.contains("ok 1 - auth"),
+            "should drop passing test lines"
+        );
+        assert!(
+            result.contains("4/5 passed") || result.contains("4 passed"),
+            "should include pass/fail counts: got {:?}",
+            result
+        );
+        assert!(result.contains("1 failed"), "should include fail count");
+    }
+
+    #[test]
+    fn test_tap_summary_counts_extracted() {
+        let output = "\
+TAP version 13
+1..60
+ok 1 - foo
+ok 2 - bar
+not ok 3 - baz fails
+  ---
+  message: boom
+  ...
+# tests 60
+# pass 57
+# fail 3";
+        let result = EmberHandler.filter(output, &args("test"));
+        assert!(
+            result.contains("57/60 passed") || result.contains("57 passed"),
+            "should show pass count: got {:?}",
+            result
+        );
+        assert!(result.contains("3 failed"), "should show fail count: got {:?}", result);
+    }
+
+    #[test]
+    fn test_more_than_5_failures_capped() {
+        let mut output = String::from("TAP version 13\n1..10\n");
+        for i in 1..=10 {
+            output.push_str(&format!("not ok {} - test {} fails\n", i, i));
+        }
+        output.push_str("# tests 10\n# pass 0\n# fail 10\n");
+
+        let result = EmberHandler.filter(&output, &args("test"));
+        // Count the "not ok" lines in output — should be exactly 5
+        let not_ok_count = result.lines().filter(|l| l.trim().starts_with("not ok")).count();
+        assert_eq!(not_ok_count, 5, "should cap at 5 failures: got {:?}", result);
+        assert!(
+            result.contains("[+5 more failures]"),
+            "should show overflow marker: got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_drops_passing_keeps_failing_summary() {
+        let output = "ok 1 - MyApp: foo passes\n\
+                      not ok 2 - MyApp: bar fails\n\
+                      # tests 2\n\
+                      # pass 1\n\
+                      # fail 1";
+        let result = EmberHandler.filter(output, &args("test"));
+        assert!(result.contains("not ok 2"), "should keep failing test");
+        assert!(!result.contains("ok 1 - MyApp: foo"), "should drop passing test");
+        assert!(
+            result.contains("1 failed"),
+            "should include fail count: got {:?}",
             result
         );
     }

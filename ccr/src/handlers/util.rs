@@ -111,7 +111,16 @@ fn filter_pytest(output: &str) -> String {
              || t.contains(" xfailed") || t.contains(" xpassed"))
             && (t.starts_with('=') || t.contains(" in ") || t.ends_with('s'));
         if is_summary {
-            out.push(line.to_string());
+            // Emit a compact "Pytest: N passed, M failed" one-liner instead of
+            // the raw "====== N passed ======" line to match RTK output style.
+            let counts = t.trim_matches(|c| c == '=' || c == ' ');
+            // Strip the trailing "in X.Xs" duration — Claude doesn't need it
+            let counts = if let Some(pos) = counts.rfind(" in ") {
+                counts[..pos].trim()
+            } else {
+                counts
+            };
+            out.push(format!("Pytest: {}", counts));
         }
         // Drop: PASSED lines, dots, "collected N items", platform header
     }
@@ -134,6 +143,15 @@ fn filter_pytest(output: &str) -> String {
 }
 
 fn filter_jest(output: &str) -> String {
+    // Tier 1: JSON parse (jest --json, possibly with mixed stdout/stderr)
+    if let Some(compact) = parse_js_test_json(output) {
+        return compact;
+    }
+    // Tier 2: text-based extraction (default reporter or user-overridden format)
+    filter_jest_text(output)
+}
+
+fn filter_jest_text(output: &str) -> String {
     let lines: Vec<&str> = output.lines().collect();
     let mut out: Vec<String> = Vec::new();
     let mut in_failure = false;
@@ -168,12 +186,12 @@ fn filter_jest(output: &str) -> String {
             }
             continue;
         }
-        // Final summary
-        if t.starts_with("Tests:") || t.starts_with("Test Suites:") || t.starts_with("Time:") {
+        // Final summary — keep Tests: and Test Suites:, drop verbose Time:
+        if t.starts_with("Tests:") || t.starts_with("Test Suites:") {
             out.push(line.to_string());
             continue;
         }
-        // Drop: PASS lines, ✓ lines, -- separators
+        // Drop: PASS lines, ✓ lines, -- separators, Time:
     }
     if out.is_empty() {
         output.to_string()
@@ -183,6 +201,15 @@ fn filter_jest(output: &str) -> String {
 }
 
 fn filter_vitest(output: &str) -> String {
+    // Tier 1: JSON parse (vitest --reporter=json, possibly with pnpm/dotenv prefix)
+    if let Some(compact) = parse_js_test_json(output) {
+        return compact;
+    }
+    // Tier 2: text-based extraction (verbose reporter or user-overridden format)
+    filter_vitest_text(output)
+}
+
+fn filter_vitest_text(output: &str) -> String {
     let lines: Vec<&str> = output.lines().collect();
     let mut out: Vec<String> = Vec::new();
     let mut in_failure = false;
@@ -213,17 +240,105 @@ fn filter_vitest(output: &str) -> String {
             }
             continue;
         }
-        // Summary line
+        // Summary lines — compact the "Test Files" + "Tests" pair to a single line
         if t.starts_with("Tests") && (t.contains("failed") || t.contains("passed")) {
             out.push(line.to_string());
         }
-        // Drop: ✓ passing lines, progress bars, module noise
+        // Drop: ✓ passing lines, progress bars, module noise, "Test Files" line (redundant with Tests)
     }
     if out.is_empty() {
         output.to_string()
     } else {
         out.join("\n")
     }
+}
+
+/// Parse Jest/Vitest JSON output to a compact summary string.
+///
+/// Both frameworks produce the same outer format when structured output is requested:
+///   vitest `--reporter=json`: `{ numTotalTests, numPassedTests, numFailedTests, testResults: [{name, assertionResults}] }`
+///   jest   `--json`:          `{ numTotalTests, numPassedTests, numFailedTests, testResults: [{testFilePath, testResults}] }`
+///
+/// Returns None if the output doesn't contain valid test JSON.
+pub fn parse_js_test_json(output: &str) -> Option<String> {
+    let json_str = extract_json_from_mixed(output)?;
+    let v: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    // Require numTotalTests to confirm this is test JSON (not some other JSON blob)
+    let total = v.get("numTotalTests").and_then(|n| n.as_u64())?;
+    let passed = v.get("numPassedTests").and_then(|n| n.as_u64()).unwrap_or(0);
+    let failed = v.get("numFailedTests").and_then(|n| n.as_u64()).unwrap_or(0);
+    let skipped = v.get("numPendingTests").and_then(|n| n.as_u64()).unwrap_or(0);
+
+    if failed == 0 && skipped == 0 {
+        // All passing — single compact line
+        return Some(format!("Tests: {} passed ({})", passed, total));
+    }
+
+    let failures = extract_js_failures_from_json(&v);
+    let mut summary = format!("Tests: {} passed", passed);
+    if failed > 0 {
+        summary.push_str(&format!(", {} FAILED", failed));
+    }
+    if skipped > 0 {
+        summary.push_str(&format!(", {} skipped", skipped));
+    }
+    summary.push_str(&format!(" ({})", total));
+
+    if failures.is_empty() {
+        return Some(summary);
+    }
+    let mut out = vec![summary];
+    for name in failures.iter().take(5) {
+        out.push(format!("  FAIL: {}", name));
+    }
+    if failures.len() > 5 {
+        out.push(format!("  [+{} more failures]", failures.len() - 5));
+    }
+    Some(out.join("\n"))
+}
+
+/// Find and return the first balanced JSON object in a mixed-content string.
+/// Handles pnpm workspace headers, dotenv prefixes, and other noise before the JSON.
+fn extract_json_from_mixed(s: &str) -> Option<&str> {
+    let start = s.find('{')?;
+    let mut depth = 0i32;
+    for (i, b) in s[start..].bytes().enumerate() {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&s[start..start + i + 1]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Extract names of failed tests from Vitest or Jest JSON.
+fn extract_js_failures_from_json(v: &serde_json::Value) -> Vec<String> {
+    let mut failures = Vec::new();
+    let Some(files) = v.get("testResults").and_then(|r| r.as_array()) else {
+        return failures;
+    };
+    for file in files {
+        // Vitest: assertionResults[]; Jest: testResults[]
+        let tests = file.get("assertionResults")
+            .or_else(|| file.get("testResults"))
+            .and_then(|r| r.as_array());
+        let Some(tests) = tests else { continue };
+        for test in tests {
+            if test.get("status").and_then(|s| s.as_str()) == Some("failed") {
+                let name = test.get("fullName")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("unknown test");
+                failures.push(name.to_string());
+            }
+        }
+    }
+    failures
 }
 
 /// Returns true if a log line should always be kept regardless of semantic similarity.

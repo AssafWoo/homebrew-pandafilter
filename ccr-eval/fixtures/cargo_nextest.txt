@@ -1,0 +1,43 @@
+    Finished test [unoptimized + debuginfo] target(s) in 4.23s
+    Starting 25 tests across 4 packages
+
+        PASS [   0.011s] webapp-auth auth::tests::test_hash_password
+        PASS [   0.008s] webapp-auth auth::tests::test_verify_password_valid
+        PASS [   0.007s] webapp-auth auth::tests::test_verify_password_invalid
+        PASS [   0.013s] webapp-auth auth::tests::test_generate_jwt
+        PASS [   0.009s] webapp-auth auth::tests::test_validate_jwt_valid
+        PASS [   0.011s] webapp-auth auth::tests::test_validate_jwt_expired
+        PASS [   0.006s] webapp-auth auth::tests::test_validate_jwt_malformed
+        FAIL [   0.241s] webapp-payments payments::tests::test_create_charge_idempotent
+        PASS [   0.019s] webapp-payments payments::tests::test_charge_declined_card
+        PASS [   0.018s] webapp-payments payments::tests::test_charge_missing_amount
+        PASS [   0.022s] webapp-payments payments::tests::test_refund_full_amount
+        FAIL [   0.187s] webapp-payments payments::tests::test_webhook_signature_verification
+        PASS [   0.015s] webapp-payments payments::tests::test_list_transactions_pagination
+        PASS [   0.014s] webapp-users users::tests::test_create_user
+        PASS [   0.012s] webapp-users users::tests::test_create_user_duplicate_email
+        PASS [   0.016s] webapp-users users::tests::test_get_user_by_id
+        PASS [   0.010s] webapp-users users::tests::test_get_user_not_found
+        PASS [   0.011s] webapp-users users::tests::test_update_user_display_name
+        PASS [   0.013s] webapp-users users::tests::test_soft_delete_user
+        PASS [   0.017s] webapp-users users::tests::test_list_users_by_role
+        PASS [   0.008s] webapp-core core::tests::test_pagination_defaults
+        PASS [   0.007s] webapp-core core::tests::test_pagination_clamps_limit
+        PASS [   0.009s] webapp-core core::tests::test_sort_order_from_str
+        PASS [   0.006s] webapp-core core::tests::test_error_response_serialization
+        PASS [   0.008s] webapp-core core::tests::test_health_check_ok
+
+------------
+
+     Summary [   0.891s] 25 tests run: 23 passed, 2 failed
+
+--- STDOUT:              webapp-payments payments::tests::test_create_charge_idempotent ---
+thread 'payments::tests::test_create_charge_idempotent' panicked at 'assertion failed: `(left == right)`
+  left: `"ch_duplicate_3kLmN"`,
+ right: `"ch_original_1aQwE"`: expected idempotency key to return original charge id'
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+payments/src/lib.rs:203:5
+
+--- STDOUT:              webapp-payments payments::tests::test_webhook_signature_verification ---
+thread 'payments::tests::test_webhook_signature_verification' panicked at 'called `Result::unwrap()` on an `Err` value: SignatureError("timestamp tolerance exceeded: signature is 312s old, max is 300s")'
+payments/src/webhook.rs:89:14

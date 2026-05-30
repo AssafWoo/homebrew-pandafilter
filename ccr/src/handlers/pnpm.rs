@@ -77,6 +77,19 @@ fn filter_install(output: &str) -> String {
 }
 
 fn filter_run(output: &str) -> String {
+    // Detect test runner JSON output (vitest --reporter=json or jest --json)
+    if let Some(compact) = super::util::parse_js_test_json(output) {
+        return compact;
+    }
+    // Detect vitest verbose text output ("Test Files N passed (N)")
+    if output.contains("Test Files") && (output.contains(" passed") || output.contains(" failed")) {
+        return super::util::test_failures(output, "vitest");
+    }
+    // Detect jest text output ("Test Suites:" + "Tests:")
+    if output.contains("Test Suites:") && output.contains("Tests:") {
+        return super::util::test_failures(output, "jest");
+    }
+
     let lines: Vec<&str> = output.lines().collect();
     if lines.len() <= 20 {
         return output.to_string();

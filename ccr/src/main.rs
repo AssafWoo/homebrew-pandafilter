@@ -357,6 +357,28 @@ jq -n --argjson updated "$UPDATED_INPUT" \
         eprintln!("warning: could not write integrity baseline: {e}");
     }
 
+    // Write panda-hook.sh — PostToolUse pre-flight wrapper.
+    // Skips spawning panda entirely for small outputs (< 1000 chars total JSON),
+    // saving ~10-20ms of process-spawn overhead per tiny tool response.
+    let hook_script_path = hooks_dir.join("panda-hook.sh");
+    let hook_script = format!(r#"#!/usr/bin/env bash
+INPUT=$(cat)
+# Quick pre-filter: if total tool response JSON is small, skip panda entirely.
+# The JSON envelope adds ~200 chars overhead, so 1000 total ≈ 800 chars output.
+if [ "${{#INPUT}}" -lt 1000 ]; then
+  exit 0
+fi
+printf '%s' "$INPUT" | PANDA_SESSION_ID=$PPID "{panda_bin_str}" hook
+"#, panda_bin_str = panda_bin_str);
+    std::fs::write(&hook_script_path, hook_script)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&hook_script_path)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&hook_script_path, perms)?;
+    }
+
     // Load or create settings.json
     let mut settings: Value = if settings_path.exists() {
         let content = std::fs::read_to_string(&settings_path)?;
@@ -365,9 +387,9 @@ jq -n --argjson updated "$UPDATED_INPUT" \
         serde_json::json!({})
     };
 
-    // PANDA_SESSION_ID=$PPID passes Claude Code's PID so all hook invocations
-    // within one session share the same state file.
-    let panda_hook_cmd = format!("PANDA_SESSION_ID=$PPID {} hook", panda_bin_str);
+    // Use the pre-flight hook script for PostToolUse so tiny outputs are skipped
+    // without spawning panda at all (saves ~10-20ms per small tool response).
+    let panda_hook_cmd = hook_script_path.to_string_lossy().to_string();
     let panda_rewrite_cmd = rewrite_script_path.to_string_lossy().to_string();
 
     // Merge PandaFilter entries into existing hook arrays rather than overwriting them.
@@ -426,12 +448,17 @@ fn uninstall_panda() -> anyhow::Result<()> {
     let settings_path = home.join(".claude").join("settings.json");
     let hooks_dir = home.join(".claude").join("hooks");
     let rewrite_script_path = hooks_dir.join("panda-rewrite.sh");
+    let hook_script_path = hooks_dir.join("panda-hook.sh");
     let hash_file_path = hooks_dir.join(".panda-hook.sha256");
 
-    // Remove hook script
+    // Remove hook scripts
     if rewrite_script_path.exists() {
         std::fs::remove_file(&rewrite_script_path)?;
         println!("Removed {}", rewrite_script_path.display());
+    }
+    if hook_script_path.exists() {
+        std::fs::remove_file(&hook_script_path)?;
+        println!("Removed {}", hook_script_path.display());
     }
 
     // Remove integrity hash file

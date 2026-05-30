@@ -7,11 +7,12 @@ impl Handler for GoHandler {
     fn rewrite_args(&self, args: &[String]) -> Vec<String> {
         let subcmd = args.get(1).map(|s| s.as_str()).unwrap_or("");
         if subcmd == "test" && !args.iter().any(|a| a == "-json") {
-            // Only inject -json for recursive test patterns (./...) where output
-            // is large enough that JSON-based aggregation saves tokens. For
-            // single-package tests, plain text output is smaller than NDJSON.
-            let has_recursive = args.iter().any(|a| a.ends_with("/..."));
-            if has_recursive {
+            // Only inject -json for the root recursive pattern `./...`.
+            // Sub-path wildcards like `./internal/pkg/...` typically have few
+            // packages; their NDJSON output is larger than equivalent plain text,
+            // causing token overhead instead of savings.
+            let has_root_recursive = args.iter().any(|a| a == "./..." || a == "...");
+            if has_root_recursive {
                 let mut out = args.to_vec();
                 out.insert(2, "-json".to_string());
                 return out;
@@ -243,6 +244,20 @@ fn filter_test(output: &str) -> String {
     if output.lines().find(|l| !l.trim().is_empty()).map(|l| l.trim_start().starts_with('{')).unwrap_or(false) {
         return filter_test_json(output);
     }
+
+    // Short-circuit: plain-text single-package clean pass.
+    // If there is no FAIL anywhere and there is an "ok " summary line,
+    // return just that summary line — verbose RUN/PASS chatter is noise.
+    let has_fail = output.lines().any(|l| {
+        let t = l.trim();
+        t.starts_with("FAIL") || t.starts_with("--- FAIL")
+    });
+    if !has_fail {
+        if let Some(ok_line) = output.lines().find(|l| l.trim_start().starts_with("ok ")) {
+            return format!("{}\n", ok_line.trim_end());
+        }
+    }
+
     let lines: Vec<&str> = output.lines().collect();
     let mut out: Vec<String> = Vec::new();
     let mut in_failure = false;
@@ -474,6 +489,8 @@ mod tests {
 
     #[test]
     fn test_emits_pass_count_summary() {
+        // Plain-text all-passing output short-circuits to just the "ok" summary line.
+        // Verbose RUN/PASS markers are stripped as noise.
         let output = "=== RUN   TestAlpha\n\
                       --- PASS: TestAlpha (0.00s)\n\
                       === RUN   TestBeta\n\
@@ -484,8 +501,13 @@ mod tests {
                       ok  \tmy/pkg\t0.010s";
         let result = filter_test(output);
         assert!(
-            result.contains("[3 tests passed]"),
-            "should emit pass count: got {:?}",
+            result.contains("ok") && result.contains("my/pkg"),
+            "should return ok summary line: got {:?}",
+            result
+        );
+        assert!(
+            !result.contains("=== RUN") && !result.contains("--- PASS:"),
+            "should strip RUN/PASS markers: got {:?}",
             result
         );
     }
@@ -736,5 +758,69 @@ github.com/other/lib@v2.0.0 github.com/dep/a@v1.0.0
         let output = "INFO [config] Config search paths: [/home/user]\nINFO [loader] done\n";
         let result = GoHandler.filter(output, &args);
         assert!(result.contains("No issues") || result == "No issues found.");
+    }
+
+    // ── plain-text clean-pass short-circuit ───────────────────────────────────
+
+    #[test]
+    fn test_verbose_passing_output_returns_only_ok_summary() {
+        // Verbose plain-text output for a single-package all-pass run.
+        let output = "\
+=== RUN   TestLogin
+--- PASS: TestLogin (0.001s)
+=== RUN   TestLogout
+--- PASS: TestLogout (0.002s)
+=== RUN   TestRefresh
+--- PASS: TestRefresh (0.001s)
+PASS
+ok  \tgithub.com/user/repo/pkg/auth\t0.123s
+";
+        let result = filter_test(output);
+        // Should contain the ok summary line and nothing else of substance.
+        assert!(
+            result.trim().starts_with("ok "),
+            "should return ok summary line, got: {:?}",
+            result
+        );
+        assert!(
+            result.contains("github.com/user/repo/pkg/auth"),
+            "should preserve package path, got: {:?}",
+            result
+        );
+        assert!(
+            !result.contains("=== RUN"),
+            "should not contain RUN markers, got: {:?}",
+            result
+        );
+        assert!(
+            !result.contains("--- PASS"),
+            "should not contain PASS lines, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_failing_output_does_not_short_circuit() {
+        // A run with a failure must NOT be short-circuited to the ok line.
+        let output = "\
+=== RUN   TestLogin
+--- PASS: TestLogin (0.001s)
+=== RUN   TestLogout
+--- FAIL: TestLogout (0.002s)
+    auth_test.go:55: expected token got empty string
+FAIL
+FAIL\tgithub.com/user/repo/pkg/auth\t0.123s
+";
+        let result = filter_test(output);
+        assert!(
+            result.contains("--- FAIL: TestLogout"),
+            "should keep FAIL line, got: {:?}",
+            result
+        );
+        assert!(
+            result.contains("expected token got empty string"),
+            "should keep failure detail, got: {:?}",
+            result
+        );
     }
 }

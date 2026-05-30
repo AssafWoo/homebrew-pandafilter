@@ -31,6 +31,51 @@ pub fn pid_path() -> PathBuf {
     socket_dir().join("embed.pid")
 }
 
+/// Send a lightweight ping to the daemon to verify it is alive and responsive.
+/// Returns `true` if the daemon responded with `{"ok": true, "pong": true}` within 2 seconds.
+/// Returns `false` if the socket doesn't exist, connection fails, or response is wrong.
+pub fn daemon_ping() -> bool {
+    let sock = socket_path();
+    if !sock.exists() {
+        return false;
+    }
+    let mut stream = match UnixStream::connect(&sock) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let ping_timeout = Duration::from_secs(2);
+    let _ = stream.set_read_timeout(Some(ping_timeout));
+    let _ = stream.set_write_timeout(Some(ping_timeout));
+
+    let req = serde_json::json!({"ping": true});
+    let req_bytes = match serde_json::to_vec(&req) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    let len = (req_bytes.len() as u32).to_be_bytes();
+    if stream.write_all(&len).is_err() || stream.write_all(&req_bytes).is_err() {
+        return false;
+    }
+    let mut len_buf = [0u8; 4];
+    if stream.read_exact(&mut len_buf).is_err() {
+        return false;
+    }
+    let resp_len = u32::from_be_bytes(len_buf) as usize;
+    if resp_len > 1024 {
+        return false;
+    }
+    let mut resp_buf = vec![0u8; resp_len];
+    if stream.read_exact(&mut resp_buf).is_err() {
+        return false;
+    }
+    let resp: serde_json::Value = match serde_json::from_slice(&resp_buf) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    resp.get("ok").and_then(|v| v.as_bool()) == Some(true)
+        && resp.get("pong").and_then(|v| v.as_bool()) == Some(true)
+}
+
 pub fn daemon_embed(texts: &[&str], normalize: bool) -> Option<Vec<Vec<f32>>> {
     let sock = socket_path();
     let mut started = false;

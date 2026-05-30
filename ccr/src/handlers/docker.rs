@@ -76,7 +76,9 @@ fn strip_ansi(s: &str) -> String {
 fn strip_timestamp(s: &str) -> String {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
-        Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z\s+")
+        // Matches ISO-8601 timestamps with optional fractional seconds and optional Z.
+        // E.g. "2024-01-15T10:23:45.123456789Z ", "2024-01-15T10:23:45Z ", "2024-01-15T10:23:45 "
+        Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.\d]*Z?\s+")
             .expect("invalid timestamp regex")
     });
     re.replace(s, "").into_owned()
@@ -289,6 +291,47 @@ mod tests {
         // A timestamp mid-line should not be stripped
         let line = "ERROR occurred at 2024-01-15T12:34:56.000Z in module";
         assert_eq!(strip_timestamp(line), line);
+    }
+
+    #[test]
+    fn timestamp_stripping_handles_no_fractional_seconds() {
+        // Timestamps without sub-second precision should also be stripped
+        let line = "2024-01-15T10:23:45Z Server started";
+        assert_eq!(strip_timestamp(line), "Server started");
+    }
+
+    // --- filter_logs integration ---
+
+    #[test]
+    fn logs_filter_strips_timestamps_preserves_content() {
+        // Timestamped lines go through filter_logs; content must survive
+        let input = "2024-01-15T10:23:45.123456789Z [INFO] Server started on port 8080\n\
+                     2024-01-15T10:23:45.234567890Z [DEBUG] Connected to database\n\
+                     2024-01-15T10:23:46.345678901Z [INFO] Ready";
+        let result = handler().filter(input, &args(&["docker", "logs", "mycontainer"]));
+        // Content must be preserved (timestamps stripped)
+        assert!(result.contains("Server started"), "got: {}", result);
+        // Timestamps must not appear
+        assert!(!result.contains("2024-01-15T"), "got: {}", result);
+    }
+
+    #[test]
+    fn logs_filter_keeps_error_lines_after_timestamp_strip() {
+        // ERROR lines in timestamped output must be retained after stripping
+        let mut input = String::new();
+        for i in 0..30 {
+            input.push_str(&format!(
+                "2024-01-15T10:23:{:02}.000Z [DEBUG] routine log line {}\n",
+                i % 60,
+                i
+            ));
+        }
+        input.push_str(
+            "2024-01-15T10:23:46.999Z [ERROR] Failed to process request: timeout\n",
+        );
+        let result = handler().filter(&input, &args(&["docker", "logs", "mycontainer"]));
+        assert!(result.contains("Failed to process request"), "got: {}", result);
+        assert!(!result.contains("2024-01-15T"), "got: {}", result);
     }
 
     // --- filter_ps ---

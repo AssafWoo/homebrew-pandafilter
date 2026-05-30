@@ -4,11 +4,12 @@
 //! No extra dependencies: uses serde_json (already in workspace) + the
 //! existing panda-core focus primitives.
 //!
-//! Four tools:
+//! Five tools:
 //!   - `query_files(query, top_k?)` — BERT + lexical hybrid ranking
 //!   - `file_signatures(path)`      — function/struct/type names from DB
 //!   - `file_impact(path, depth?)`  — co-change neighbourhood (BFS)
 //!   - `index_status()`             — meta + file count
+//!   - `compress_output(output, command?)` — handler-optimized shell output compression
 
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -173,6 +174,24 @@ fn handle_tools_list(id: Value) -> Value {
                         "properties": {},
                         "required": []
                     }
+                },
+                {
+                    "name": "compress_output",
+                    "description": "Compress shell command output to reduce token usage. Pass the raw command output and an optional command hint (e.g. 'cargo build', 'git log') to get handler-optimized compression. Returns the compressed text and token savings.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "output": {
+                                "type": "string",
+                                "description": "Raw shell command output to compress"
+                            },
+                            "command": {
+                                "type": "string",
+                                "description": "Shell command that produced this output (e.g. 'cargo build', 'git log --oneline'). Used to select the right handler."
+                            }
+                        },
+                        "required": ["output"]
+                    }
                 }
             ]
         }
@@ -196,6 +215,7 @@ fn handle_tools_call(id: Value, params: &Value, index: &Option<DbIndex>) -> Valu
         "file_signatures"  => tool_file_signatures(&args, index),
         "file_impact"      => tool_file_impact(&args, index),
         "index_status"     => tool_index_status(index),
+        "compress_output"  => tool_compress_output(&args),
         other => Err(anyhow::anyhow!("Unknown tool: {other}")),
     };
 
@@ -427,6 +447,54 @@ fn tool_index_status(index: &Option<DbIndex>) -> Result<String> {
             Ok(out)
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tool: compress_output
+// ---------------------------------------------------------------------------
+
+fn tool_compress_output(args: &Value) -> Result<String> {
+    let output = args.get("output").and_then(|v| v.as_str()).unwrap_or("");
+    let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+
+    if output.is_empty() {
+        return Ok(String::new());
+    }
+
+    // Build args vec from the command string for handler dispatch.
+    // Mirrors what filter.rs does: split on whitespace, take the base command.
+    let cmd_args: Vec<String> = command
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect();
+
+    // Dispatch to a specialized handler if one exists for this command.
+    // get_handler uses the first token (binary name) for lookup.
+    let base_cmd = cmd_args.first().map(|s| s.as_str()).unwrap_or("");
+    let compressed = if !base_cmd.is_empty() {
+        if let Some(handler) = crate::handlers::get_handler(base_cmd) {
+            let filtered = handler.filter(output, &cmd_args);
+            if filtered != output { filtered } else { output.to_string() }
+        } else {
+            output.to_string()
+        }
+    } else {
+        output.to_string()
+    };
+
+    let input_tokens = panda_core::tokens::count_tokens(output);
+    let output_tokens = panda_core::tokens::count_tokens(&compressed);
+    let savings_pct = 100usize.saturating_sub(
+        output_tokens.saturating_mul(100) / input_tokens.max(1)
+    );
+
+    Ok(format!(
+        "{}\n\n[panda: {} → {} tokens ({}% savings)]",
+        compressed,
+        input_tokens,
+        output_tokens,
+        savings_pct
+    ))
 }
 
 // ---------------------------------------------------------------------------

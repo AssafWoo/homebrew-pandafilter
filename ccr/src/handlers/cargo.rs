@@ -186,8 +186,10 @@ fn group_clippy_warnings(warnings: &[String]) -> Vec<String> {
 
 /// Filter `cargo build/check/clippy --message-format json` output.
 /// Keeps only compiler-message (errors + warnings); discards compiler-artifact noise.
+/// Errors are grouped by message text to deduplicate identical diagnostics at multiple sites.
 fn filter_build(output: &str) -> String {
-    let mut errors: Vec<String> = Vec::new();
+    // (message_text, location_string) — location may be empty for plain-text lines
+    let mut error_tuples: Vec<(String, String)> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
     let mut success: Option<bool> = None;
 
@@ -212,16 +214,16 @@ fn filter_build(output: &str) -> String {
                                     span.get("file_name").and_then(|f| f.as_str()).unwrap_or("");
                                 let line_n =
                                     span.get("line_start").and_then(|l| l.as_u64()).unwrap_or(0);
-                                format!(" [{}:{}]", file, line_n)
+                                format!("{}:{}", file, line_n)
                             })
                             .unwrap_or_default();
 
                         match level {
                             "error" | "error[E]" => {
-                                errors.push(format!("error: {}{}", text, location));
+                                error_tuples.push((text.to_string(), location));
                             }
                             "warning" => {
-                                warnings.push(format!("warning: {}{}", text, location));
+                                warnings.push(format!("warning: {}", text));
                             }
                             _ => {}
                         }
@@ -235,23 +237,67 @@ fn filter_build(output: &str) -> String {
         } else {
             // Non-JSON line (e.g. cargo stderr without JSON flag, or mixed output)
             // Keep error/warning lines
-            if trimmed.starts_with("error") || trimmed.starts_with("warning") {
-                if trimmed.starts_with("error") {
-                    errors.push(trimmed.to_string());
-                } else {
-                    warnings.push(trimmed.to_string());
-                }
+            if trimmed.starts_with("error") {
+                error_tuples.push((trimmed.to_string(), String::new()));
+            } else if trimmed.starts_with("warning") {
+                warnings.push(trimmed.to_string());
             }
         }
     }
 
-    const MAX_ERRORS: usize = 15;
-    let mut out: Vec<String> = Vec::new();
-    let shown = errors.len().min(MAX_ERRORS);
-    out.extend(errors[..shown].iter().cloned());
-    if errors.len() > MAX_ERRORS {
-        out.push(format!("[+{} more errors]", errors.len() - MAX_ERRORS));
+    // --- Deduplicate errors by message text ---
+    // BTreeMap preserves sorted key order; we use a Vec to track insertion order.
+    let mut error_map: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    let mut insertion_order: Vec<String> = Vec::new();
+
+    let total_locations: usize = error_tuples.len();
+
+    for (msg, loc) in error_tuples {
+        if !error_map.contains_key(&msg) {
+            insertion_order.push(msg.clone());
+            error_map.insert(msg.clone(), Vec::new());
+        }
+        if !loc.is_empty() {
+            error_map.get_mut(&msg).unwrap().push(loc);
+        }
     }
+
+    const MAX_UNIQUE_ERRORS: usize = 8;
+    const MAX_INLINE_LOCS: usize = 3;
+
+    let unique_count = insertion_order.len();
+    let mut out: Vec<String> = Vec::new();
+
+    let shown_unique = unique_count.min(MAX_UNIQUE_ERRORS);
+    for msg in &insertion_order[..shown_unique] {
+        let locs = &error_map[msg];
+        if locs.is_empty() {
+            out.push(format!("error: {}", msg));
+        } else if locs.len() == 1 {
+            out.push(format!("error: {} [{}]", msg, locs[0]));
+        } else {
+            let shown_locs = locs.len().min(MAX_INLINE_LOCS);
+            let loc_parts: Vec<&str> = locs[..shown_locs].iter().map(|s| s.as_str()).collect();
+            let mut loc_str = loc_parts.join(", ");
+            if locs.len() > MAX_INLINE_LOCS {
+                loc_str = format!("{}, +{} more", loc_str, locs.len() - MAX_INLINE_LOCS);
+            }
+            out.push(format!("error: {} [{loc_str}] ({} locations)", msg, locs.len()));
+        }
+    }
+    if unique_count > MAX_UNIQUE_ERRORS {
+        out.push(format!("[+{} more unique errors]", unique_count - MAX_UNIQUE_ERRORS));
+    }
+
+    // Summary line: only when there is more than 1 unique error or more than 2 total locations
+    if unique_count > 1 || total_locations > 2 {
+        out.push(format!(
+            "[{} unique errors at {} total locations]",
+            unique_count, total_locations
+        ));
+    }
+
     if !warnings.is_empty() {
         out.push(format!("[{} warnings]", warnings.len()));
         let grouped = group_clippy_warnings(&warnings);
@@ -264,7 +310,7 @@ fn filter_build(output: &str) -> String {
             }
         }
         Some(false) => {
-            if errors.is_empty() {
+            if unique_count == 0 {
                 out.push("Build FAILED".to_string());
             }
         }
@@ -371,17 +417,19 @@ fn filter_test(output: &str) -> String {
 }
 
 /// Filter `cargo nextest run` output.
-/// Keeps FAIL lines and the Summary line; drops PASS and "running N tests" lines.
+/// Keeps FAIL lines, their STDOUT detail blocks (capped at 200 chars), and the Summary line.
+/// Drops PASS lines and "running N tests" noise.
 fn filter_nextest(output: &str) -> String {
     let mut failures: Vec<String> = Vec::new();
     let mut summary: Option<String> = None;
+    // Map from test name (from FAIL line) to its captured STDOUT detail
+    let mut stdout_blocks: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut found_any = false;
 
+    // First pass: collect FAIL lines and Summary
     for line in output.lines() {
         let t = line.trim();
-        if t.is_empty() {
-            continue;
-        }
+        if t.is_empty() { continue; }
         if t.starts_with("FAIL") {
             failures.push(line.to_string());
             found_any = true;
@@ -395,7 +443,59 @@ fn filter_nextest(output: &str) -> String {
         return output.to_string();
     }
 
-    let mut out: Vec<String> = failures;
+    // Second pass: collect STDOUT blocks for failing tests.
+    // Format: "--- STDOUT:              pkg tests::test_name ---"
+    //         ... lines ...
+    //         "--- STDOUT:              ... ---"  or end of section
+    let lines: Vec<&str> = output.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let t = lines[i].trim();
+        if t.starts_with("--- STDOUT:") {
+            // Extract test name from the header
+            let header = t.trim_start_matches("--- STDOUT:").trim().trim_end_matches("---").trim();
+            // header is like "webapp-payments payments::tests::test_create_charge_idempotent"
+            // The test name is the last whitespace-delimited token
+            let test_name = header.split_whitespace().last().unwrap_or("").to_string();
+            i += 1;
+            let mut block_lines: Vec<&str> = Vec::new();
+            // Collect until next "--- " section marker or end
+            while i < lines.len() {
+                let next = lines[i].trim();
+                if next.starts_with("--- ") && (next.ends_with("---") || next.contains("STDOUT:") || next.contains("STDERR:")) {
+                    break;
+                }
+                block_lines.push(lines[i]);
+                i += 1;
+            }
+            if !test_name.is_empty() && !block_lines.is_empty() {
+                let block = block_lines.join("\n").trim().to_string();
+                // Cap at 300 chars — enough for an assertion message
+                let capped = if block.len() > 300 {
+                    format!("{}…", &block[..300])
+                } else {
+                    block
+                };
+                stdout_blocks.insert(test_name, capped);
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    for fail_line in &failures {
+        out.push(fail_line.clone());
+        // Find the test name in this FAIL line and attach its STDOUT block if any
+        // FAIL line format: "        FAIL [   0.241s] webapp-payments payments::tests::test_name"
+        if let Some(test_name) = fail_line.trim().splitn(3, ' ').nth(2)
+            .and_then(|rest| rest.split_whitespace().last())
+        {
+            if let Some(detail) = stdout_blocks.get(test_name) {
+                out.push(format!("  {}", detail.replace('\n', "\n  ")));
+            }
+        }
+    }
     if let Some(s) = summary {
         out.push(s);
     }
@@ -546,31 +646,150 @@ mod tests {
         assert_eq!(cargo_subcmd(&args), "");
     }
 
-    // ── error cap ────────────────────────────────────────────────────────────
+    // ── error deduplication ──────────────────────────────────────────────────
 
-    fn make_error_json(i: usize) -> String {
+    /// Build a JSON compiler-message line with a specific message text and file location.
+    fn make_error_json_located(msg: &str, file: &str, line_n: u64) -> String {
         format!(
-            r#"{{"reason":"compiler-message","message":{{"level":"error","message":"error {}","spans":[]}}}}"#,
-            i
+            r#"{{"reason":"compiler-message","message":{{"level":"error","message":"{msg}","spans":[{{"file_name":"{file}","line_start":{line_n}}}]}}}}"#
         )
     }
 
     #[test]
-    fn errors_capped_at_15_shows_overflow_line() {
-        let lines: Vec<String> = (0..20).map(make_error_json).collect();
+    fn same_error_at_three_files_deduplicates() {
+        // Same message text at three distinct locations → single output line listing all locs.
+        let lines = vec![
+            make_error_json_located("cannot borrow `x` as mutable", "src/a.rs", 12),
+            make_error_json_located("cannot borrow `x` as mutable", "src/b.rs", 34),
+            make_error_json_located("cannot borrow `x` as mutable", "src/c.rs", 56),
+        ];
         let output = lines.join("\n");
         let result = filter_build(&output);
+        // Only one line starting with "error:"
         let error_lines: Vec<&str> = result.lines().filter(|l| l.starts_with("error:")).collect();
-        assert_eq!(error_lines.len(), 15, "should show exactly 15 errors");
-        assert!(result.contains("[+5 more errors]"), "should show overflow line");
+        assert_eq!(error_lines.len(), 1, "same message should collapse to 1 line; got:\n{}", result);
+        // All three locations present
+        assert!(result.contains("src/a.rs:12"), "loc a missing; got:\n{}", result);
+        assert!(result.contains("src/b.rs:34"), "loc b missing; got:\n{}", result);
+        assert!(result.contains("src/c.rs:56"), "loc c missing; got:\n{}", result);
+        // "(3 locations)" annotation
+        assert!(result.contains("(3 locations)"), "missing location count; got:\n{}", result);
     }
 
     #[test]
-    fn errors_under_cap_no_overflow_line() {
-        let lines: Vec<String> = (0..10).map(make_error_json).collect();
+    fn different_errors_shown_separately() {
+        let lines = vec![
+            make_error_json_located("use of moved value: `y`", "src/handler.rs", 89),
+            make_error_json_located("mismatched types", "src/lib.rs", 5),
+        ];
         let output = lines.join("\n");
         let result = filter_build(&output);
-        assert!(!result.contains("more errors"), "should not show overflow line");
+        let error_lines: Vec<&str> = result.lines().filter(|l| l.starts_with("error:")).collect();
+        assert_eq!(error_lines.len(), 2, "two distinct errors should each get a line; got:\n{}", result);
+        assert!(result.contains("use of moved value"), "first error missing; got:\n{}", result);
+        assert!(result.contains("mismatched types"), "second error missing; got:\n{}", result);
+    }
+
+    #[test]
+    fn summary_line_appears_for_multiple_unique_errors() {
+        // 2 unique errors → summary should appear.
+        let lines = vec![
+            make_error_json_located("error A", "src/a.rs", 1),
+            make_error_json_located("error B", "src/b.rs", 2),
+        ];
+        let output = lines.join("\n");
+        let result = filter_build(&output);
+        assert!(
+            result.contains("unique errors at"),
+            "summary line should appear for multiple unique errors; got:\n{}", result
+        );
+        assert!(
+            result.contains("2 unique errors at 2 total locations"),
+            "summary counts wrong; got:\n{}", result
+        );
+    }
+
+    #[test]
+    fn summary_line_appears_for_more_than_two_total_locations() {
+        // 1 unique error but 3 locations → summary should appear.
+        let lines = vec![
+            make_error_json_located("single msg", "src/a.rs", 1),
+            make_error_json_located("single msg", "src/b.rs", 2),
+            make_error_json_located("single msg", "src/c.rs", 3),
+        ];
+        let output = lines.join("\n");
+        let result = filter_build(&output);
+        assert!(
+            result.contains("1 unique errors at 3 total locations"),
+            "summary line missing or wrong counts; got:\n{}", result
+        );
+    }
+
+    #[test]
+    fn summary_line_absent_for_single_error_single_location() {
+        let lines = vec![make_error_json_located("lone error", "src/a.rs", 1)];
+        let output = lines.join("\n");
+        let result = filter_build(&output);
+        assert!(
+            !result.contains("unique errors at"),
+            "summary should not appear for single error at single location; got:\n{}", result
+        );
+    }
+
+    #[test]
+    fn cap_at_eight_unique_messages() {
+        // 10 distinct error messages → only 8 shown + overflow indicator
+        let lines: Vec<String> = (0..10)
+            .map(|i| make_error_json_located(&format!("distinct error {}", i), "src/x.rs", i as u64))
+            .collect();
+        let output = lines.join("\n");
+        let result = filter_build(&output);
+        let error_lines: Vec<&str> = result.lines().filter(|l| l.starts_with("error:")).collect();
+        assert_eq!(error_lines.len(), 8, "should cap at 8 unique messages; got:\n{}", result);
+        assert!(
+            result.contains("[+2 more unique errors]"),
+            "overflow indicator missing; got:\n{}", result
+        );
+    }
+
+    #[test]
+    fn inline_locations_capped_at_three_with_overflow() {
+        // 5 locations for same message → show 3 inline + "+2 more"
+        let locs = [
+            ("src/a.rs", 1u64), ("src/b.rs", 2), ("src/c.rs", 3),
+            ("src/d.rs", 4), ("src/e.rs", 5),
+        ];
+        let lines: Vec<String> = locs.iter()
+            .map(|(f, l)| make_error_json_located("overflow msg", f, *l))
+            .collect();
+        let output = lines.join("\n");
+        let result = filter_build(&output);
+        assert!(result.contains("+2 more"), "should show +2 more for 5 locs; got:\n{}", result);
+        assert!(result.contains("(5 locations)"), "should show (5 locations); got:\n{}", result);
+    }
+
+    #[test]
+    fn plain_text_errors_grouped_by_full_text() {
+        // Non-JSON plain-text lines with identical text should be grouped.
+        let output = "error: linker failed\nerror: linker failed\nerror: linker failed\n";
+        let result = filter_build(&output);
+        let error_lines: Vec<&str> = result.lines().filter(|l| l.starts_with("error:")).collect();
+        assert_eq!(error_lines.len(), 1, "identical plain-text errors should collapse; got:\n{}", result);
+    }
+
+    #[test]
+    fn no_summary_for_two_total_locations_exactly() {
+        // 2 total locations with 1 unique message: should NOT show summary (threshold is > 2)
+        let lines = vec![
+            make_error_json_located("msg", "src/a.rs", 1),
+            make_error_json_located("msg", "src/b.rs", 2),
+        ];
+        let output = lines.join("\n");
+        let result = filter_build(&output);
+        assert!(
+            !result.contains("unique errors at"),
+            "summary should not appear for exactly 2 total locations; got:\n{}", result
+        );
     }
 
     // ── filter_nextest ───────────────────────────────────────────────────────
@@ -608,6 +827,25 @@ Summary [0.002s] 2 tests run, 0 failed
         let output = "mycrate::tests::test_a\nmycrate::tests::test_b\n";
         let result = handler.filter(output, &args);
         assert_eq!(result, output, "cargo nextest list should pass through unchanged");
+    }
+
+    #[test]
+    fn nextest_stdout_block_attached_to_failing_test() {
+        let output = "\
+        PASS [   0.001s] mycrate::tests::passing_test\n\
+        FAIL [   0.002s] webapp-payments payments::tests::test_create_charge\n\
+        Summary [   0.003s] 2 tests run: 1 passed, 1 failed\n\
+\n\
+--- STDOUT:              webapp-payments payments::tests::test_create_charge ---\n\
+thread 'payments::tests::test_create_charge' panicked at 'assertion failed: idempotency key'\n\
+note: run with RUST_BACKTRACE=1\n\
+--- STDOUT:              end ---\n\
+";
+        let result = filter_nextest(output);
+        assert!(result.contains("FAIL"), "should keep FAIL line");
+        assert!(result.contains("idempotency key"), "should include STDOUT detail");
+        assert!(!result.contains("PASS"), "should drop PASS line");
+        assert!(result.contains("Summary"), "should keep summary");
     }
 
     #[test]

@@ -34,6 +34,18 @@ impl Handler for TerraformHandler {
     }
 }
 
+/// Cap a list of resource addresses at `limit`, appending "[+N more]" if needed.
+fn cap_resources(resources: &[String], limit: usize) -> Vec<String> {
+    if resources.len() <= limit {
+        resources.to_vec()
+    } else {
+        let extra = resources.len() - limit;
+        let mut out: Vec<String> = resources[..limit].to_vec();
+        out.push(format!("[+{} more]", extra));
+        out
+    }
+}
+
 fn filter_plan(output: &str) -> String {
     const PLAN_NO_CHANGE_RULES: &[util::MatchOutputRule] = &[util::MatchOutputRule {
         success_pattern: r"No changes\. Your infrastructure matches the configuration",
@@ -44,6 +56,93 @@ fn filter_plan(output: &str) -> String {
         return msg;
     }
 
+    // Pass through plain "No changes." outputs that don't match the full pattern above.
+    if output.lines().any(|l| l.trim().starts_with("No changes.")) {
+        return output.to_string();
+    }
+
+    // Parse resource-change lines: `  # <address> will be created/updated/destroyed/replaced`
+    let mut creates: Vec<String> = Vec::new();
+    let mut updates: Vec<String> = Vec::new();
+    let mut destroys: Vec<String> = Vec::new();
+    let mut replaces: Vec<String> = Vec::new();
+
+    // Extract the terraform summary line ("Plan: N to add, M to change, K to destroy.")
+    let mut plan_summary: Option<String> = None;
+
+    for line in output.lines() {
+        let t = line.trim();
+
+        // Capture the official terraform summary line.
+        if t.starts_with("Plan:") {
+            plan_summary = Some(t.to_string());
+            continue;
+        }
+
+        // Resource change annotations look like:  # module.foo.aws_s3_bucket.bar will be created
+        if let Some(rest) = t.strip_prefix("# ") {
+            if let Some(addr) = rest.strip_suffix(" will be created") {
+                creates.push(addr.to_string());
+            } else if rest.ends_with(" will be updated in-place") {
+                let addr = rest.trim_end_matches(" will be updated in-place");
+                updates.push(addr.to_string());
+            } else if rest.ends_with(" will be destroyed") {
+                let addr = rest.trim_end_matches(" will be destroyed");
+                destroys.push(addr.to_string());
+            } else if rest.ends_with(" must be replaced") {
+                let addr = rest.trim_end_matches(" must be replaced");
+                replaces.push(addr.to_string());
+            }
+        }
+    }
+
+    // If we found grouped resource changes, emit the compact grouped view.
+    if !creates.is_empty() || !updates.is_empty() || !destroys.is_empty() || !replaces.is_empty() {
+        let mut out: Vec<String> = Vec::new();
+
+        // Header: prefer the terraform summary line; otherwise build one from counts.
+        if let Some(summary) = plan_summary {
+            out.push(format!("[{}]", summary));
+        } else {
+            out.push(format!(
+                "[Plan: {} to add, {} to change, {} to destroy]",
+                creates.len(),
+                updates.len() + replaces.len(),
+                destroys.len(),
+            ));
+        }
+
+        const CAP: usize = 8;
+
+        if !creates.is_empty() {
+            out.push(format!("create ({}):", creates.len()));
+            for r in cap_resources(&creates, CAP) {
+                out.push(format!("  + {}", r));
+            }
+        }
+        if !updates.is_empty() {
+            out.push(format!("update ({}):", updates.len()));
+            for r in cap_resources(&updates, CAP) {
+                out.push(format!("  ~ {}", r));
+            }
+        }
+        if !replaces.is_empty() {
+            out.push(format!("replace ({}):", replaces.len()));
+            for r in cap_resources(&replaces, CAP) {
+                out.push(format!("  +/- {}", r));
+            }
+        }
+        if !destroys.is_empty() {
+            out.push(format!("destroy ({}):", destroys.len()));
+            for r in cap_resources(&destroys, CAP) {
+                out.push(format!("  - {}", r));
+            }
+        }
+
+        return out.join("\n");
+    }
+
+    // Fallback: keep lines with diff markers or Plan:/No changes as before.
     let mut out: Vec<String> = Vec::new();
     for line in output.lines() {
         let t = line.trim();
@@ -274,6 +373,55 @@ mod tests {
         let result = handler().filter(output, &["terraform".to_string(), "output".to_string()]);
         assert!(result.contains("<sensitive>"), "got: {}", result);
         assert!(!result.contains("supersecret"), "got: {}", result);
+    }
+
+    #[test]
+    fn plan_groups_resources_by_action() {
+        // 5 creates, 3 updates, 1 destroy — must be grouped with correct header
+        let mut input = String::new();
+        input.push_str("Terraform will perform the following actions:\n\n");
+        for i in 1..=5 {
+            input.push_str(&format!("  # aws_iam_role.role_{} will be created\n", i));
+            input.push_str("  + resource \"aws_iam_role\" \"role_1\" {\n  }\n\n");
+        }
+        for i in 1..=3 {
+            input.push_str(&format!(
+                "  # aws_lambda_function.fn_{} will be updated in-place\n",
+                i
+            ));
+            input.push_str("  ~ resource \"aws_lambda_function\" \"fn_1\" {\n  }\n\n");
+        }
+        input.push_str("  # aws_s3_bucket.old will be destroyed\n");
+        input.push_str("  - resource \"aws_s3_bucket\" \"old\" {\n  }\n\n");
+        input.push_str("Plan: 5 to add, 3 to change, 1 to destroy.\n");
+
+        let result = handler().filter(&input, &["terraform".to_string(), "plan".to_string()]);
+
+        // Header present
+        assert!(result.contains("Plan: 5 to add"), "missing header, got: {}", result);
+        // Groups present
+        assert!(result.contains("create (5):"), "missing create group, got: {}", result);
+        assert!(result.contains("update (3):"), "missing update group, got: {}", result);
+        assert!(result.contains("destroy (1):"), "missing destroy group, got: {}", result);
+        // Spot-check one resource address per group
+        assert!(result.contains("aws_iam_role.role_1"), "got: {}", result);
+        assert!(result.contains("aws_lambda_function.fn_1"), "got: {}", result);
+        assert!(result.contains("aws_s3_bucket.old"), "got: {}", result);
+    }
+
+    #[test]
+    fn plan_no_changes_passthrough() {
+        // Plain "No changes." output must pass through unchanged
+        let input = "No changes. Your infrastructure is up-to-date.\n\
+                     Terraform has compared your state and found no differences.\n";
+        let result = handler().filter(input, &["terraform".to_string(), "plan".to_string()]);
+        // Either the check_match_output short-circuit fires or the passthrough returns the full text.
+        // Either way the key phrase must be present.
+        assert!(
+            result.contains("No changes") || result.contains("no changes"),
+            "got: {}",
+            result
+        );
     }
 
     #[test]

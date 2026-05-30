@@ -12,6 +12,18 @@ fn re_ts_error() -> &'static regex::Regex {
     })
 }
 
+/// Returns true if the TS error code in the message is in the 5xxx range (config errors).
+fn is_ts5xxx(msg: &str) -> bool {
+    // msg looks like "TS5055: Cannot write file ..."
+    let code_str = msg.split(':').next().unwrap_or("").trim();
+    if let Some(digits) = code_str.strip_prefix("TS") {
+        if let Ok(n) = digits.parse::<u32>() {
+            return n >= 5000 && n < 6000;
+        }
+    }
+    false
+}
+
 /// Maximum length for a TypeScript error message before truncation.
 /// TypeScript emits very verbose type mismatch descriptions; trim them to keep context.
 const MAX_MSG_LEN: usize = 80;
@@ -74,53 +86,117 @@ impl Handler for TscHandler {
         }
 
         let mut out: Vec<String> = Vec::new();
-        for (file, messages) in &grouped {
-            out.push(file.clone());
 
-            // Within each file, collapse runs of the same TS error code.
-            // e.g. TS2339 appearing 4 times → "  TS2339 (×4): L12, L45, L78, L92 — msg"
-            let mut i = 0;
-            while i < messages.len() {
-                let (lineno, kind, msg) = &messages[i];
-                // Extract the TS code prefix (e.g. "TS2339")
-                let ts_code = msg.split(':').next().unwrap_or("").trim();
-                // Collect consecutive entries with the same code
-                let mut j = i + 1;
-                while j < messages.len() {
-                    let (_, k2, m2) = &messages[j];
-                    let code2 = m2.split(':').next().unwrap_or("").trim();
-                    if code2 == ts_code && k2 == kind {
-                        j += 1;
-                    } else {
-                        break;
+        // Collect all TS5xxx messages across all files for a single grouped summary.
+        let mut ts5_count = 0usize;
+
+        for (file, messages) in &grouped {
+            // Separate TS5xxx from non-TS5xxx within this file's messages.
+            let non5: Vec<&(String, String, String)> =
+                messages.iter().filter(|(_, _, m)| !is_ts5xxx(m)).collect();
+            let five_count = messages.iter().filter(|(_, _, m)| is_ts5xxx(m)).count();
+            ts5_count += five_count;
+
+            // Only emit the file header if there are non-TS5xxx diagnostics.
+            if !non5.is_empty() {
+                out.push(file.clone());
+
+                // Within each file, collapse runs of the same TS error code.
+                // e.g. TS2339 appearing 4 times → "  TS2339 (×4): L12, L45, L78, L92 — msg"
+                let mut i = 0;
+                while i < non5.len() {
+                    let (lineno, kind, msg) = non5[i];
+                    // Extract the TS code prefix (e.g. "TS2339")
+                    let ts_code = msg.split(':').next().unwrap_or("").trim();
+                    // Collect consecutive entries with the same code
+                    let mut j = i + 1;
+                    while j < non5.len() {
+                        let (_, k2, m2) = non5[j];
+                        let code2 = m2.split(':').next().unwrap_or("").trim();
+                        if code2 == ts_code && k2 == kind {
+                            j += 1;
+                        } else {
+                            break;
+                        }
                     }
-                }
-                let count = j - i;
-                if count == 1 {
-                    out.push(format!("  L{}: {} {}", lineno, kind, msg));
-                } else {
-                    let line_nums: Vec<String> = messages[i..j]
-                        .iter()
-                        .map(|(ln, _, _)| format!("L{}", ln))
-                        .collect();
-                    // Keep the message from the first occurrence (already truncated)
-                    let msg_after_code = msg.splitn(2, ':').nth(1).unwrap_or(msg).trim();
-                    let msg_preview = if msg_after_code.len() > 60 {
-                        format!("{}…", &msg_after_code[..60])
+                    let count = j - i;
+                    if count == 1 {
+                        out.push(format!("  L{}: {} {}", lineno, kind, msg));
                     } else {
-                        msg_after_code.to_string()
-                    };
-                    out.push(format!(
-                        "  {} (×{}): {} — {}",
-                        ts_code, count,
-                        line_nums.join(", "),
-                        msg_preview
-                    ));
+                        let line_nums: Vec<String> = non5[i..j]
+                            .iter()
+                            .map(|(ln, _, _)| format!("L{}", ln))
+                            .collect();
+                        // Keep the message from the first occurrence (already truncated)
+                        let msg_after_code = msg.splitn(2, ':').nth(1).unwrap_or(msg).trim();
+                        let msg_preview = if msg_after_code.len() > 60 {
+                            format!("{}…", &msg_after_code[..60])
+                        } else {
+                            msg_after_code.to_string()
+                        };
+                        out.push(format!(
+                            "  {} (×{}): {} — {}",
+                            ts_code, count,
+                            line_nums.join(", "),
+                            msg_preview
+                        ));
+                    }
+                    i = j;
                 }
-                i = j;
             }
         }
+
+        // Emit a single summary line for all TS5xxx config errors.
+        if ts5_count > 0 {
+            out.push(format!(
+                "[TS5xxx: {} config error{} — run tsc --noEmit to see details]",
+                ts5_count,
+                if ts5_count == 1 { "" } else { "s" }
+            ));
+        }
+
         out.push(format!("[{} errors, {} warnings]", error_count, warning_count));
         out.join("\n")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handlers::Handler;
+
+    #[test]
+    fn ts5xxx_grouped_into_single_summary() {
+        // 5 identical TS5055 lines across the same file should collapse to exactly
+        // one TS5xxx summary line, not five individual lines.
+        let input: String = (1..=5)
+            .map(|i| {
+                format!(
+                    "src/tsconfig.ts({},1): error TS5055: Cannot write file 'dist/foo.js'.\n",
+                    i
+                )
+            })
+            .collect();
+        let handler = TscHandler;
+        let result = handler.filter(&input, &[]);
+        let ts5_lines: Vec<&str> = result.lines().filter(|l| l.contains("TS5xxx")).collect();
+        assert_eq!(ts5_lines.len(), 1, "expected exactly 1 TS5xxx summary line, got:\n{}", result);
+        assert!(ts5_lines[0].contains('5'), "summary should mention the count 5:\n{}", result);
+        // No individual TS5055 lines should appear
+        assert!(
+            !result.contains("TS5055"),
+            "individual TS5055 lines should not appear:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn non_ts5xxx_errors_still_shown_per_file() {
+        let input = "src/app.ts(10,3): error TS2345: Argument of type 'string' is not assignable.\n";
+        let handler = TscHandler;
+        let result = handler.filter(input, &[]);
+        assert!(result.contains("src/app.ts"), "file name should appear");
+        assert!(result.contains("TS2345"), "non-5xxx error should be shown individually");
+        assert!(!result.contains("TS5xxx"), "no TS5xxx summary expected");
     }
 }

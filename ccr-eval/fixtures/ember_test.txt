@@ -1,0 +1,83 @@
+TAP version 13
+1..60
+ok 1 - auth/login: renders login form
+ok 2 - auth/login: shows validation error on empty submit
+ok 3 - auth/login: shows error on invalid credentials
+ok 4 - auth/login: redirects to dashboard on success
+ok 5 - auth/login: remembers user with keep-me-signed-in
+ok 6 - auth/logout: clears session and redirects
+ok 7 - auth/logout: removes auth token from storage
+ok 8 - auth/register: renders registration form
+ok 9 - auth/register: validates email format
+ok 10 - auth/register: validates password length
+ok 11 - auth/register: shows terms acceptance error
+ok 12 - auth/register: creates account on valid submit
+not ok 13 - auth/register: sends confirmation email after signup
+  ---
+  message: >
+    Error: expected fetch to be called with '/api/auth/confirm-email', but was never called
+    at auth/register-test.js:112
+  ...
+ok 14 - users/profile: renders user profile page
+ok 15 - users/profile: shows avatar and display name
+ok 16 - users/profile: updates display name on save
+ok 17 - users/profile: shows validation error on blank name
+ok 18 - users/profile: uploads profile image
+ok 19 - users/index: lists all users in table
+ok 20 - users/index: paginates results
+ok 21 - users/index: filters by role
+ok 22 - users/index: sorts by created date
+ok 23 - users/index: searches by name
+ok 24 - users/detail: renders user detail page
+ok 25 - users/detail: shows account status badge
+ok 26 - users/detail: links to edit page
+ok 27 - payments/checkout: renders checkout form
+ok 28 - payments/checkout: shows order summary
+ok 29 - payments/checkout: validates card number
+ok 30 - payments/checkout: validates expiry date
+ok 31 - payments/checkout: validates CVV
+not ok 32 - payments/checkout: processes payment successfully
+  ---
+  message: >
+    AssertionError: expected component to transition to /payments/confirmation but remained on /payments/checkout
+    Stripe mock did not resolve: stub returned undefined for createPaymentMethod
+    at payments/checkout-test.js:204
+  ...
+ok 33 - payments/checkout: shows declined card error
+ok 34 - payments/history: lists past transactions
+ok 35 - payments/history: filters by date range
+ok 36 - payments/history: shows total amount spent
+ok 37 - payments/history: exports CSV
+ok 38 - payments/invoice: renders invoice page
+ok 39 - payments/invoice: shows line items
+ok 40 - payments/invoice: prints invoice
+ok 41 - dashboard: renders summary widgets
+ok 42 - dashboard: shows recent activity feed
+ok 43 - dashboard: displays correct user count
+ok 44 - dashboard: displays revenue chart
+ok 45 - dashboard: refreshes data on interval
+ok 46 - settings/general: renders settings form
+ok 47 - settings/general: saves changes successfully
+ok 48 - settings/general: shows unsaved changes warning
+ok 49 - settings/notifications: toggles email notifications
+ok 50 - settings/notifications: toggles push notifications
+ok 51 - settings/security: changes password
+ok 52 - settings/security: enables two-factor auth
+ok 53 - settings/security: shows active sessions
+not ok 54 - settings/security: revokes active session
+  ---
+  message: >
+    Error: Assertion Failed: called with unexpected arguments
+    expected DELETE /api/sessions/abc123 but received DELETE /api/sessions/undefined
+    at settings/security-test.js:78
+  ...
+ok 55 - components/modal: opens on trigger
+ok 56 - components/modal: closes on backdrop click
+ok 57 - components/modal: closes on escape key
+ok 58 - components/table: renders column headers
+ok 59 - components/table: sorts on header click
+ok 60 - components/table: handles empty state
+
+# tests 60
+# pass 57
+# fail 3

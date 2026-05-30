@@ -101,6 +101,7 @@ pub fn run() -> Result<()> {
 // ── Bash tool handler ─────────────────────────────────────────────────────────
 
 fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
+    let _start = std::time::Instant::now();
     let full_cmd = hook_input
         .tool_input
         .get("command")
@@ -192,8 +193,9 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     // handler + BERT overhead can exceed any compression benefit — particularly on
     // already-concise commands like `git log --oneline`, `go list`, `wc`.
     // Benchmark feedback: single-command runs on compact Opus output went negative;
-    // this threshold prevents that regression.
-    const BYPASS_CHARS: usize = 500;
+    // this threshold prevents that regression. Raised to 800 to also bypass the
+    // 500-800 char range where pipeline overhead still exceeds compression benefit.
+    const BYPASS_CHARS: usize = 800;
     if output_text.len() < BYPASS_CHARS {
         return Ok(None);
     }
@@ -394,6 +396,24 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         result.output = loop_output;
     }
 
+    // ── SimHash near-duplicate dedup ─────────────────────────────────────────────
+    // For outputs with many similar lines (logs, repeated errors), SimHash groups
+    // near-duplicates in O(n) without BERT overhead. Only activates for 50+ line
+    // outputs where repetition saves tokens.
+    {
+        let line_count = result.output.lines().count();
+        if line_count >= panda_core::simhash::MIN_LINES {
+            let lines: Vec<&str> = result.output.lines().collect();
+            let deduped = panda_core::simhash::dedup_near_duplicates(
+                &lines,
+                panda_core::simhash::HAMMING_THRESHOLD,
+            );
+            if deduped.len() < lines.len() {
+                result.output = deduped.join("\n");
+            }
+        }
+    }
+
     // ── Handler fast path + graduated bypass ────────────────────────────────
     //
     // BERT-based session passes (delta, dedup, cross-dedup, C2 compression) add
@@ -415,7 +435,12 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         && result.output.len() < 1000
         && (result.output.len() as f64 / output_text.len().max(1) as f64) > 0.90;
 
-    let skip_bert = clean_room || handler_fast_path || soft_bypass;
+    // Turn-1 bypass: on the very first command of a session there is no centroid
+    // or prior embedding to compare against, so the delta and dedup passes are
+    // meaningless — they would record state but produce zero compression benefit.
+    let first_turn = session.entries.is_empty();
+
+    let skip_bert = clean_room || handler_fast_path || soft_bypass || first_turn;
 
     let mut final_output = if skip_bert {
         // Fast path: use handler output directly, skip all BERT-based passes.
@@ -548,7 +573,7 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         output_tokens,
         command_hint.clone(),
         subcommand,
-        None,
+        Some(_start.elapsed().as_millis() as u64),
     );
     crate::util::append_analytics(&analytics);
 
@@ -582,9 +607,10 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     if output_chars < input_chars && savings_pct >= MIN_HEADER_SAVINGS_PCT {
         let ratio_pct = 100 - savings_pct;
         let handler_label = command_hint.as_deref().unwrap_or("generic");
+        let elapsed_ms = _start.elapsed().as_millis() as u64;
         let header = format!(
-            "# panda: {} → {} chars ({} handler; {}% retained)\n",
-            input_chars, output_chars, handler_label, ratio_pct
+            "# panda: {} → {} chars ({} handler; {}% retained; {}ms)\n",
+            input_chars, output_chars, handler_label, ratio_pct, elapsed_ms
         );
         final_output = format!("{}{}", header, final_output);
     }

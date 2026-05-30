@@ -1,0 +1,60 @@
+ WARN  Moving pnpm lock file from /home/user/app/pnpm-lock.yaml to /home/user/app/.pnpm-lock.yaml
+ WARN  `node_modules` directory already exists, no need to lock.
+
+> webapp@2.4.1 test /home/user/app
+> vitest run --reporter=verbose
+
+ RUN  v1.6.0 /home/user/app
+
+ ✓ src/auth/auth.test.ts (8 tests) 143ms
+   ✓ auth > login with valid credentials returns JWT
+   ✓ auth > login with invalid password returns 401
+   ✓ auth > login with unknown email returns 401
+   ✓ auth > register creates new user record
+   ✓ auth > register hashes password with bcrypt
+   ✓ auth > refresh token rotates access token
+   ✓ auth > logout invalidates refresh token
+   ✓ auth > me returns current user from token
+
+ ✓ src/users/users.test.ts (7 tests) 89ms
+   ✓ users > getAll returns paginated list
+   ✓ users > getById returns user record
+   ✓ users > getById throws 404 for unknown id
+   ✓ users > update patches fields correctly
+   ✓ users > update rejects invalid email
+   ✓ users > delete soft-deletes the record
+   ✓ users > delete returns 404 on second call
+
+ × src/payments/payments.test.ts (6 tests | 1 failed) 312ms
+   ✓ payments > createCharge charges card successfully
+   ✓ payments > createCharge rejects expired card
+   ✓ payments > getHistory returns sorted transactions
+   ✓ payments > getHistory filters by date range
+   × payments > createRefund reverses the charge amount  147ms
+     → AssertionError: expected 0 to equal 1
+       Received: { refund_status: 'pending', amount_reversed: 0 }
+       Expected: { refund_status: 'succeeded', amount_reversed: 2999 }
+
+       at src/payments/payments.test.ts:88:28
+   ✓ payments > webhook validates Stripe signature
+
+ ✓ src/notifications/notifications.test.ts (5 tests) 67ms
+   ✓ notifications > sendEmail queues email via SES
+   ✓ notifications > sendEmail skips unsubscribed users
+   ✓ notifications > sendPush sends FCM payload
+   ✓ notifications > sendPush skips users without device token
+   ✓ notifications > markRead updates notification record
+
+ × src/settings/settings.test.ts (4 tests | 1 failed) 201ms
+   ✓ settings > getOrgSettings returns default values
+   × settings > updateOrgSettings persists plan change  93ms
+     → TypeError: Cannot read properties of undefined (reading 'stripe_subscription_id')
+       at src/settings/settings.service.ts:134:22
+       at src/settings/settings.test.ts:57:14
+   ✓ settings > toggleFeatureFlag updates flag in cache
+   ✓ settings > toggleFeatureFlag broadcasts change via websocket
+
+ Test Files  3 passed, 2 failed (5)
+ Tests       28 passed, 2 failed (30)
+ Start at    14:22:10
+ Duration    1.24s (transform 88ms, setup 41ms, collect 312ms, tests 812ms)

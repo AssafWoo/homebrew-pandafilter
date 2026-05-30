@@ -1,0 +1,21 @@
+command_hint = "jest"
+
+[[questions]]
+question = "How many tests passed?"
+key_facts = ["30"]
+
+[[questions]]
+question = "How many tests failed?"
+key_facts = ["2"]
+
+[[questions]]
+question = "How many total tests were run?"
+key_facts = ["32"]
+
+[[questions]]
+question = "Which test in the API suite failed?"
+key_facts = ["POST /users", "creates new user"]
+
+[[questions]]
+question = "Which JWT test failed?"
+key_facts = ["refresh", "rotates token"]

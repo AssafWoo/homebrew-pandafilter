@@ -1,0 +1,29 @@
+command_hint = "ember test"
+
+[[questions]]
+question = "How many tests passed?"
+key_facts = ["57"]
+
+[[questions]]
+question = "How many tests failed?"
+key_facts = ["3"]
+
+[[questions]]
+question = "How many total tests were run?"
+key_facts = ["60"]
+
+[[questions]]
+question = "Which test failed in the auth/register suite?"
+key_facts = ["sends confirmation email after signup"]
+
+[[questions]]
+question = "Which payments test failed?"
+key_facts = ["checkout", "processes payment successfully"]
+
+[[questions]]
+question = "Which settings/security test failed?"
+key_facts = ["revokes active session"]
+
+[[questions]]
+question = "What was the error in the payments/checkout failure?"
+key_facts = ["Stripe", "createPaymentMethod", "confirmation"]

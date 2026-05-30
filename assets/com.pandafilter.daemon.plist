@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS LaunchAgent for the PandaFilter embedding daemon.
+
+  Installation:
+    cp assets/com.pandafilter.daemon.plist \
+       ~/Library/LaunchAgents/com.pandafilter.daemon.plist
+    launchctl load ~/Library/LaunchAgents/com.pandafilter.daemon.plist
+
+  Uninstallation:
+    launchctl unload ~/Library/LaunchAgents/com.pandafilter.daemon.plist
+    rm ~/Library/LaunchAgents/com.pandafilter.daemon.plist
+
+  The daemon is started at login and restarted automatically if it exits
+  unexpectedly (KeepAlive = true).  PANDA_NO_IDLE_EXIT=1 disables the
+  8-hour idle-exit so launchd, not the daemon itself, controls the lifetime.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pandafilter.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/panda</string>
+        <string>daemon</string>
+        <string>start</string>
+    </array>
+
+    <!-- Start automatically at login -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart the daemon if it exits for any reason -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Minimum seconds between restarts to avoid tight crash loops -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Inherit a sane PATH so `panda` can locate its model files -->
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+        <!-- Disable idle-exit: launchd owns the lifetime under KeepAlive -->
+        <key>PANDA_NO_IDLE_EXIT</key>
+        <string>1</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>~/Library/Logs/pandafilter-daemon.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>~/Library/Logs/pandafilter-daemon.log</string>
+</dict>
+</plist>

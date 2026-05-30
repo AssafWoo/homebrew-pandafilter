@@ -22,6 +22,12 @@ impl Handler for FindHandler {
     }
 
     fn filter(&self, output: &str, _args: &[String]) -> String {
+        // Short-circuit: output is already a count (piped through `wc -l`).
+        // A single integer line means there is nothing left to compress.
+        if output.trim().parse::<u64>().is_ok() {
+            return output.to_string();
+        }
+
         let lines: Vec<&str> = output
             .lines()
             .filter(|l| !l.trim().is_empty())
@@ -113,5 +119,44 @@ fn parent_dir(path: &str) -> &str {
         }
     } else {
         "."
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filter_passthrough_single_integer_wc_l() {
+        // Output is the result of `find ... | wc -l` — already maximally compact.
+        let handler = FindHandler;
+        assert_eq!(handler.filter("127\n", &[]), "127\n");
+        assert_eq!(handler.filter("0\n", &[]), "0\n");
+        assert_eq!(handler.filter("   42   ", &[]), "   42   ");
+    }
+
+    #[test]
+    fn filter_applies_path_filtering_for_many_paths() {
+        // Build 60 file paths (>50 threshold) across five directories.
+        // This exceeds the passthrough limit and triggers the grouped summary.
+        let paths: String = (0..60)
+            .map(|i| format!("/project/src/module_{}/file_{}.rs\n", i % 5, i))
+            .collect();
+        let handler = FindHandler;
+        let result = handler.filter(&paths, &[]);
+        // Should not be a passthrough: the grouped summary must appear.
+        assert!(
+            result.contains("entries") || result.contains("total"),
+            "expected grouped output, got: {:?}",
+            result
+        );
+        // The handler groups by directory and shows at most 5 per directory,
+        // so output should be significantly shorter than 60 raw lines.
+        let raw_line_count = result.lines().count();
+        assert!(
+            raw_line_count < 60,
+            "expected fewer than 60 lines after compression, got {}",
+            raw_line_count
+        );
     }
 }

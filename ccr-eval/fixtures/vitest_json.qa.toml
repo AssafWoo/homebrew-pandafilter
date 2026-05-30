@@ -1,0 +1,21 @@
+command_hint = "vitest"
+
+[[questions]]
+question = "How many tests passed?"
+key_facts = ["45"]
+
+[[questions]]
+question = "How many tests failed?"
+key_facts = ["2"]
+
+[[questions]]
+question = "How many total tests ran?"
+key_facts = ["47"]
+
+[[questions]]
+question = "Which auth test failed?"
+key_facts = ["token refresh", "AuthService"]
+
+[[questions]]
+question = "Which billing test failed?"
+key_facts = ["invoice generation", "billing"]

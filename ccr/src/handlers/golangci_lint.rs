@@ -93,13 +93,45 @@ fn filter_lint_json(output: &str) -> String {
     filter_lint_text(output)
 }
 
+/// Extract the severity of a diagnostic line.
+/// golangci-lint can emit `file:line:col: error: message (linter)` or
+/// `file:line:col: warning: message (linter)` when severity output is enabled.
+/// Without explicit severity tokens the line is treated as a warning (golangci-lint
+/// default for most linters).
+fn diagnostic_severity(line: &str) -> &'static str {
+    // Skip over "file:line:col: " prefix — three colon-separated fields.
+    let after_pos = {
+        let mut colons = 0usize;
+        let mut idx = 0usize;
+        for (i, ch) in line.char_indices() {
+            if ch == ':' {
+                colons += 1;
+                if colons == 3 {
+                    idx = i + 1;
+                    break;
+                }
+            }
+        }
+        line.get(idx..).unwrap_or("").trim()
+    };
+    if after_pos.starts_with("error:") || after_pos.starts_with("error ") {
+        "error"
+    } else if after_pos.starts_with("warning:") || after_pos.starts_with("warning ") {
+        "warning"
+    } else {
+        "warning"
+    }
+}
+
 fn filter_lint_text(output: &str) -> String {
     // golangci-lint output format:
     //   src/handler.go:42:9: ineffectual assignment (ineffassign)
     //   src/main.go:15:2: S1000: use plain channel (gosimple)
+    //   src/foo.go:1:1: error: something bad (govet)       ← explicit severity
     // Also has INFO/WARN/ERR prefix lines from the runner itself.
 
-    let mut diagnostics: Vec<String> = Vec::new();
+    let mut error_diagnostics: Vec<String> = Vec::new();
+    let mut warning_diagnostics: Vec<String> = Vec::new();
     let mut linter_errors: Vec<String> = Vec::new();
     let mut total = 0usize;
     let clean;
@@ -130,7 +162,12 @@ fn filter_lint_text(output: &str) -> String {
         if looks_like_diagnostic(t) {
             total += 1;
             if total <= 40 {
-                diagnostics.push(t.to_string());
+                let sev = diagnostic_severity(t);
+                if sev == "error" {
+                    error_diagnostics.push(t.to_string());
+                } else {
+                    warning_diagnostics.push(t.to_string());
+                }
             }
             continue;
         }
@@ -140,16 +177,32 @@ fn filter_lint_text(output: &str) -> String {
         }
     }
 
-    clean = diagnostics.is_empty() && linter_errors.is_empty();
+    let all_diagnostics: Vec<String> = error_diagnostics
+        .iter()
+        .chain(warning_diagnostics.iter())
+        .cloned()
+        .collect();
+
+    clean = all_diagnostics.is_empty() && linter_errors.is_empty();
 
     if clean {
         return "No issues found.".to_string();
     }
 
+    let n_errors = error_diagnostics.len();
+    let n_warnings = warning_diagnostics.len();
+
     let mut out: Vec<String> = Vec::new();
 
-    // Group by file for readability
-    let grouped = group_by_file(&diagnostics);
+    // Summary header — errors first, then warnings
+    out.push(format!("[golangci-lint: {} error{}, {} warning{}]",
+        n_errors, if n_errors == 1 { "" } else { "s" },
+        n_warnings, if n_warnings == 1 { "" } else { "s" },
+    ));
+
+    // Group by file for readability; errors-first ordering is preserved because
+    // all_diagnostics is errors ++ warnings.
+    let grouped = group_by_file(&all_diagnostics);
     for (file, issues) in &grouped {
         out.push(file.clone());
         for issue in issues {
@@ -282,6 +335,29 @@ src/handler.go:42:9: ineffectual assignment to err (ineffassign)
         let result = GolangCiLintHandler.filter(output, &args());
         assert!(result.contains("src/handler.go"));
         assert!(result.contains("ineffassign"));
+    }
+
+    #[test]
+    fn errors_appear_before_warnings() {
+        // Warnings are listed first in the input; errors must appear before them in output.
+        let output = "\
+src/util.go:5:1: warning: exported function Foo should have comment (golint)
+src/util.go:6:1: warning: exported type Bar should have comment (golint)
+src/main.go:10:3: error: undeclared name: xyz (typecheck)
+src/main.go:20:5: error: cannot use int as string (typecheck)
+";
+        let result = GolangCiLintHandler.filter(output, &args());
+        // The header line must exist
+        assert!(result.contains("golangci-lint:"), "missing header line:\n{}", result);
+        // Positions: first error line must appear before first warning line
+        let error_pos = result.find("src/main.go");
+        let warn_pos = result.find("src/util.go");
+        assert!(error_pos.is_some() && warn_pos.is_some(), "both files must appear");
+        assert!(
+            error_pos.unwrap() < warn_pos.unwrap(),
+            "errors (src/main.go) should appear before warnings (src/util.go):\n{}",
+            result
+        );
     }
 
     #[test]
