@@ -4,11 +4,6 @@ use std::collections::BTreeMap;
 pub struct FindHandler;
 
 impl Handler for FindHandler {
-    fn skip_bert(&self) -> bool {
-        // find output is a structured directory tree; BERT may corrupt the grouping.
-        true
-    }
-
     fn rewrite_args(&self, args: &[String]) -> Vec<String> {
         let mut out = args.to_vec();
         // Inject -maxdepth 8 if no depth limit is already set
