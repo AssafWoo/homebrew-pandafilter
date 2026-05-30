@@ -2647,7 +2647,7 @@ fn benchmark_mypy() {
     assert!(!out.contains("Daemon"), "daemon startup line must be stripped");
     assert!(!out.contains(": note:"), "note lines must be stripped");
     assert!(out.contains("Found"), "summary line must be present");
-    assert!(out.contains("more errors"), "per-file cap must be applied");
+    assert!(out.contains("more in"), "per-file cap must be applied");
     assert!(
         savings_pct(in_tok, out_tok) >= 40.0,
         "expected ≥40% savings on mypy output, got {:.0}%",
