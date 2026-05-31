@@ -113,6 +113,13 @@ fn model_registry(name: &str) -> HfModel {
             repo: "Xenova/all-MiniLM-L12-v2",
             model_file: "onnx/model.onnx",
         },
+        // INT8 quantized L6 — 23MB vs 90MB, ~3x faster inference on VNNI CPUs.
+        // Same 384-dim output space; negligible accuracy loss for anomaly scoring.
+        // Enable with: bert_model = "AllMiniLML6V2Q" in [global] of panda.toml.
+        "AllMiniLML6V2Q" => HfModel {
+            repo: "Xenova/all-MiniLM-L6-v2",
+            model_file: "onnx/model_int8.onnx",
+        },
         _ => HfModel {
             repo: "Qdrant/all-MiniLM-L6-v2-onnx",
             model_file: "model.onnx",
@@ -386,11 +393,15 @@ fn compute_centroid(embeddings: &[Vec<f32>]) -> Vec<f32> {
 pub fn embed_direct(texts: Vec<&str>) -> anyhow::Result<Vec<Vec<f32>>> {
     #[cfg(unix)]
     if !in_daemon() {
-        if let Some(embeddings) = crate::embed_client::daemon_embed(&texts, true) {
-            return Ok(embeddings);
-        }
-        apply_nice_once();
+        // Client (hook/filter) processes never load ONNX locally. Loading a 90MB model
+        // in an ephemeral subprocess takes 5-15s every cold start — far worse than
+        // gracefully falling back to head+tail. Return Err so callers use their fallback.
+        return match crate::embed_client::daemon_embed(&texts, true) {
+            Some(embs) => Ok(embs),
+            None => anyhow::bail!("daemon unavailable — skipping BERT for this invocation"),
+        };
     }
+    apply_nice_once();
     let model = get_model()?;
     let mut embeddings = model.embed(&texts)?;
     for emb in &mut embeddings {
@@ -402,11 +413,12 @@ pub fn embed_direct(texts: Vec<&str>) -> anyhow::Result<Vec<Vec<f32>>> {
 pub fn embed_raw(texts: Vec<&str>) -> anyhow::Result<Vec<Vec<f32>>> {
     #[cfg(unix)]
     if !in_daemon() {
-        if let Some(embeddings) = crate::embed_client::daemon_embed(&texts, false) {
-            return Ok(embeddings);
-        }
-        apply_nice_once();
+        return match crate::embed_client::daemon_embed(&texts, false) {
+            Some(embs) => Ok(embs),
+            None => anyhow::bail!("daemon unavailable — skipping BERT for this invocation"),
+        };
     }
+    apply_nice_once();
     let model = get_model()?;
     model.embed(&texts)
 }

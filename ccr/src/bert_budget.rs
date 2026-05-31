@@ -3,14 +3,11 @@ use std::cell::Cell;
 /// Maximum number of `embed_batch` calls allowed per hook invocation.
 ///
 /// Rationale:
-/// - Normal hot path after optimizer fixes (Bash, ~100 lines): 4-5 calls
-/// - Large chunked input (2000 lines): up to 8 calls
-/// - WebFetch with many sections: up to N additional calls (bounded below by this)
-///
-/// Budget of 12 gives the full normal path headroom plus 4-7 extra calls for WebFetch,
-/// large files, or unusual inputs before the fallback activates.
-/// Will never trigger during typical usage.
-pub const MAX_BERT_CALLS: usize = 12;
+/// - Normal hot path (Bash, ~100 lines): 2-3 calls (noise filter + summarize)
+/// - Session update adds 1 call (now guarded by BERT_MIN_LINES=30)
+/// - Budget of 6 covers all normal paths with 2 slots to spare for large inputs.
+/// - Reduced from 12 → 6 to cap worst-case IPC round trips to the embedding daemon.
+pub const MAX_BERT_CALLS: usize = 6;
 
 thread_local! {
     static CALLS_REMAINING: Cell<usize> = Cell::new(MAX_BERT_CALLS);

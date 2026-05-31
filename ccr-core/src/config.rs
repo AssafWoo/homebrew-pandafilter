@@ -83,8 +83,11 @@ pub struct GlobalConfig {
     #[serde(default)]
     pub hard_keep_patterns: Vec<String>,
     /// BERT embedding model to use for semantic summarization.
-    /// Options: "AllMiniLML6V2" (default, ~90MB), "AllMiniLML12V2" (~120MB).
-    /// First call wins — changing this requires restarting the process.
+    /// Options:
+    ///   "AllMiniLML6V2"  — default, ~90MB FP32, best accuracy
+    ///   "AllMiniLML6V2Q" — INT8 quantized, ~23MB, ~3x faster inference, minimal accuracy loss
+    ///   "AllMiniLML12V2" — ~120MB, higher accuracy, slower
+    /// First call wins — changing this requires restarting the daemon process.
     #[serde(default = "default_bert_model")]
     pub bert_model: String,
     /// Commands whose output represents persistent system state.

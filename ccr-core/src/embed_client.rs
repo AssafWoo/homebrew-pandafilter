@@ -4,11 +4,15 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const MAX_RETRIES: u32 = 2;
-const RETRY_DELAY: Duration = Duration::from_millis(500);
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
-const STARTUP_POLL_DELAY: Duration = Duration::from_millis(250);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_RETRIES: u32 = 1;
+const RETRY_DELAY: Duration = Duration::from_millis(200);
+// Keep daemon wait short: if the socket isn't ready in 2s the daemon is still loading
+// its ONNX model (which takes 5-15s). Rather than blocking the hook for 15s we
+// return None immediately and let callers fall through to head+tail.
+// The daemon continues loading in the background and will be warm for the next call.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(2);
+const STARTUP_POLL_DELAY: Duration = Duration::from_millis(100);
 
 static SOCKET_DIR: OnceLock<PathBuf> = OnceLock::new();
 
@@ -215,4 +219,21 @@ fn try_auto_start() -> bool {
         Ok(None) => true,
         Err(_) => true,
     }
+}
+
+/// Fire-and-forget daemon start — spawns `panda daemon start` and returns immediately
+/// without waiting. Used for proactive warm-up at hook entry so the daemon is loading
+/// during handler routing (200-500ms) rather than waiting until the first embed call.
+pub fn try_auto_start_detached() -> bool {
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(_) => return false,
+    };
+    std::process::Command::new(exe)
+        .args(["daemon", "start"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .is_ok()
 }

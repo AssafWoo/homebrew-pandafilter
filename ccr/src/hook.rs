@@ -102,6 +102,19 @@ pub fn run() -> Result<()> {
 
 fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     let _start = std::time::Instant::now();
+
+    // Proactively ensure the daemon is running — fire-and-forget, costs ~1ms.
+    // While the hook does handler routing and regex filtering (50-200ms of work),
+    // the daemon has a head start loading its ONNX model so it's warm by the time
+    // the first embed call arrives. If already running, panda daemon start exits
+    // immediately (idempotent). No-op on non-Unix builds.
+    #[cfg(unix)]
+    if !panda_core::embed_client::daemon_ping() {
+        std::thread::spawn(|| {
+            panda_core::embed_client::try_auto_start_detached();
+        });
+    }
+
     let full_cmd = hook_input
         .tool_input
         .get("command")
@@ -189,13 +202,12 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         return Ok(None);
     }
 
-    // Skip the entire pipeline for small outputs. Under 500 chars (~125 tokens),
-    // handler + BERT overhead can exceed any compression benefit — particularly on
-    // already-concise commands like `git log --oneline`, `go list`, `wc`.
-    // Benchmark feedback: single-command runs on compact Opus output went negative;
-    // this threshold prevents that regression. Raised to 800 to also bypass the
-    // 500-800 char range where pipeline overhead still exceeds compression benefit.
-    const BYPASS_CHARS: usize = 800;
+    // Skip the entire pipeline for small outputs.
+    // Raised from 800 → 2000: outputs under ~500 tokens rarely benefit from BERT
+    // compression vs the IPC overhead of a daemon embed call. Commands like
+    // `git log --oneline`, `go list`, `wc`, `ls`, and most shell one-liners stay
+    // under 2000 chars and pass through instantly.
+    const BYPASS_CHARS: usize = 2000;
     // Compiler-error outputs must always be processed regardless of size so that
     // error-loop detection can record and compare signatures across retries.
     let has_compiler_errors = output_text.contains("error[E")
@@ -244,12 +256,15 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     let sid = crate::session::session_id();
     let mut session = crate::session::SessionState::load(&sid);
 
-    // RC: result cache — return byte-identical output on hit (prompt cache stability)
+    // RC: result cache — return byte-identical output on hit (prompt cache stability).
+    // Loaded once here; kept in `rc_cache` so the insert at the end avoids a second
+    // disk read. Saved asynchronously after the output is returned.
     let rc_key = crate::result_cache::ResultCache::compute_key(&output_text, command_hint.as_deref());
+    let mut rc_cache: Option<crate::result_cache::ResultCache> = None;
     if !clean_room {
-    let mut rc = crate::result_cache::ResultCache::load(&sid);
-    rc.evict_old();
-    if let Some(entry) = rc.lookup(&rc_key) {
+        let mut rc = crate::result_cache::ResultCache::load(&sid);
+        rc.evict_old();
+        if let Some(entry) = rc.lookup(&rc_key) {
             let cached_output = entry.output.clone();
             let analytics = panda_core::analytics::Analytics::new_cache_hit(
                 entry.input_tokens,
@@ -261,6 +276,7 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
             let hook_output = HookOutput { output: cached_output };
             return Ok(Some(serde_json::to_string(&hook_output)?));
         }
+        rc_cache = Some(rc);
     }
 
     // cmd_key for session tracking: skip leading KEY=VALUE env vars and wrapper prefix.
@@ -371,7 +387,8 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
             store.record_lines(&raw_lines, &output_lines);
             store.promote_eligible();
             store.evict_stale(now_secs());
-            store.save(key);
+            let key_bg = key.clone();
+            std::thread::spawn(move || { store.save(&key_bg); });
         }
     }
 
@@ -422,22 +439,22 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     // ── Handler fast path + graduated bypass ────────────────────────────────
     //
     // BERT-based session passes (delta, dedup, cross-dedup, C2 compression) add
-    // 2-5 seconds latency per command via embedding calls. For well-handled short
-    // output, BERT can't improve on what the handler already did — skip it.
+    // latency per command via embedding calls. For well-handled short output, BERT
+    // can't improve on what the handler already did — skip it.
     //
-    // Graduated bypass:
-    //   handler_fast_path: handler compressed >15% AND output < 2000 chars → skip BERT
-    //   soft_bypass: handler output < 1000 chars AND barely compressed (<10%) → skip BERT
+    // Graduated bypass (thresholds raised to reduce unnecessary BERT calls):
+    //   handler_fast_path: handler compressed >15% AND output < 5000 chars → skip BERT
+    //   soft_bypass: handler output < 2500 chars AND barely compressed (<10%) → skip BERT
     //   Neither: run full BERT pipeline (large/unhandled output)
-    const BERT_MIN_LINES: usize = 15;
+    const BERT_MIN_LINES: usize = 30;
     let pipeline_line_count = result.output.lines().count();
 
     let handler_fast_path = command_hint.is_some()
-        && result.output.len() < 2000
+        && result.output.len() < 5000
         && (result.output.len() as f64) < (output_text.len() as f64 * 0.85);
 
     let soft_bypass = !handler_fast_path
-        && result.output.len() < 1000
+        && result.output.len() < 2500
         && (result.output.len() as f64 / output_text.len().max(1) as f64) > 0.90;
 
     // Turn-1 bypass: on the very first command of a session there is no centroid
@@ -461,7 +478,9 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
             if !current_error_set.is_empty() {
                 session.set_last_error_signatures(&cmd_key, current_error_set.to_storage());
             }
-            session.save(&sid);
+            let sess_bg = session.clone();
+            let sid_bg = sid.clone();
+            std::thread::spawn(move || { sess_bg.save(&sid_bg); });
         }
         result.output.clone()
     } else {
@@ -545,7 +564,9 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
                 if !current_error_set.is_empty() {
                     session.set_last_error_signatures(&cmd_key, current_error_set.to_storage());
                 }
-                session.save(&sid);
+                let sess_bg = session.clone();
+                let sid_bg = sid.clone();
+                std::thread::spawn(move || { sess_bg.save(&sid_bg); });
             }
         }
 
@@ -630,11 +651,12 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         final_output = format!("{}\n{}", warning_block, final_output);
     }
 
-    // Result cache insert — skipped in clean-room mode.
-    if !clean_room {
-        let mut rc = crate::result_cache::ResultCache::load(&sid);
+    // Result cache insert — uses the already-loaded cache from the top of this
+    // function (no second disk read). Saved asynchronously after output is returned.
+    if let Some(mut rc) = rc_cache {
         rc.insert(rc_key, final_output.clone(), input_tokens, output_tokens);
-        rc.save(&sid);
+        let sid_bg = sid.clone();
+        std::thread::spawn(move || { rc.save(&sid_bg); });
     }
 
     let hook_output = HookOutput { output: final_output };
@@ -1634,7 +1656,7 @@ fn write_hook_tee(cmd: &str, content: &str) -> Option<std::path::PathBuf> {
     let tee_dir = dirs::data_local_dir()?.join("panda").join("tee");
     std::fs::create_dir_all(&tee_dir).ok()?;
 
-    // Auto-rotate: keep max 50 tee files
+    // Auto-rotate: keep max 50 tee files (synchronous — fast readdir, no I/O wait)
     if let Ok(entries) = std::fs::read_dir(&tee_dir) {
         let mut files: Vec<std::path::PathBuf> = entries
             .filter_map(|e| e.ok().map(|e| e.path()))
@@ -1658,7 +1680,13 @@ fn write_hook_tee(cmd: &str, content: &str) -> Option<std::path::PathBuf> {
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect();
     let path = tee_dir.join(format!("{}_{}.log", ts, safe_cmd));
-    std::fs::write(&path, content).ok()?;
+
+    // Write the tee file on a background thread — the caller only needs the path
+    // (for the "[full output: ...]" hint), not the write to complete.
+    let path_bg = path.clone();
+    let content_bg = content.to_string();
+    std::thread::spawn(move || { let _ = std::fs::write(&path_bg, content_bg); });
+
     Some(path)
 }
 

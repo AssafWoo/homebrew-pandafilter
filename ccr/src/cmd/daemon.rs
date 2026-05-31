@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -22,6 +22,12 @@ pub enum DaemonAction {
     Stop,
     /// Show daemon status
     Status,
+    /// Install the daemon as a macOS LaunchAgent (auto-start at login)
+    #[cfg(target_os = "macos")]
+    InstallService,
+    /// Uninstall the macOS LaunchAgent
+    #[cfg(target_os = "macos")]
+    UninstallService,
 }
 
 pub fn run(action: DaemonAction) -> Result<()> {
@@ -29,6 +35,10 @@ pub fn run(action: DaemonAction) -> Result<()> {
         DaemonAction::Start => start(),
         DaemonAction::Stop => stop(),
         DaemonAction::Status => status(),
+        #[cfg(target_os = "macos")]
+        DaemonAction::InstallService => install_service(),
+        #[cfg(target_os = "macos")]
+        DaemonAction::UninstallService => uninstall_service(),
     }
 }
 
@@ -443,6 +453,122 @@ fn status() -> Result<()> {
     println!("  socket: {}", sock.display());
     if let Some(mb) = rss {
         println!("  memory: {} MB", mb);
+    }
+
+    Ok(())
+}
+
+// ── macOS LaunchAgent service installer ───────────────────────────────────────
+
+#[cfg(target_os = "macos")]
+fn launchagents_dir() -> Option<std::path::PathBuf> {
+    dirs::home_dir().map(|h| h.join("Library").join("LaunchAgents"))
+}
+
+#[cfg(target_os = "macos")]
+fn plist_path() -> Option<std::path::PathBuf> {
+    launchagents_dir().map(|d| d.join("com.pandafilter.daemon.plist"))
+}
+
+#[cfg(target_os = "macos")]
+fn install_service() -> Result<()> {
+    let exe = std::env::current_exe()
+        .context("cannot determine panda binary path")?
+        .to_string_lossy()
+        .to_string();
+
+    let plist_dir = launchagents_dir()
+        .context("cannot determine ~/Library/LaunchAgents")?;
+    std::fs::create_dir_all(&plist_dir)?;
+    let dest = plist_dir.join("com.pandafilter.daemon.plist");
+
+    // Build plist inline so install works even without the assets/ directory.
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pandafilter.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>{exe}</string>
+        <string>daemon</string>
+        <string>start</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+        <key>PANDA_NO_IDLE_EXIT</key>
+        <string>1</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>{log}</string>
+
+    <key>StandardErrorPath</key>
+    <string>{log}</string>
+</dict>
+</plist>
+"#,
+        exe = exe,
+        log = dirs::home_dir()
+            .unwrap_or_default()
+            .join("Library/Logs/pandafilter-daemon.log")
+            .display(),
+    );
+
+    std::fs::write(&dest, &plist)
+        .with_context(|| format!("failed to write plist to {}", dest.display()))?;
+
+    // launchctl load is idempotent; if already loaded it prints a warning but exits 0.
+    let status = std::process::Command::new("launchctl")
+        .args(["load", &dest.to_string_lossy()])
+        .status()
+        .context("failed to run launchctl load")?;
+
+    if status.success() {
+        println!("panda daemon installed as LaunchAgent.");
+        println!("  plist: {}", dest.display());
+        println!("  The daemon will now start automatically at login and restart if it crashes.");
+        println!("  To uninstall: panda daemon uninstall-service");
+    } else {
+        println!("plist written to {} but launchctl load failed (exit {}).", dest.display(), status);
+        println!("Try: launchctl load {}", dest.display());
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn uninstall_service() -> Result<()> {
+    let dest = match plist_path() {
+        Some(p) => p,
+        None => anyhow::bail!("cannot determine ~/Library/LaunchAgents"),
+    };
+
+    if dest.exists() {
+        let _ = std::process::Command::new("launchctl")
+            .args(["unload", &dest.to_string_lossy()])
+            .status();
+        std::fs::remove_file(&dest)
+            .with_context(|| format!("failed to remove {}", dest.display()))?;
+        println!("panda daemon LaunchAgent uninstalled.");
+    } else {
+        println!("panda daemon LaunchAgent is not installed.");
     }
 
     Ok(())
