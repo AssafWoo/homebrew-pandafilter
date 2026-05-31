@@ -2,20 +2,20 @@ class Pandafilter < Formula
   desc "LLM token optimizer for Claude Code — 60-90% token savings on dev operations"
   homepage "https://github.com/AssafWoo/PandaFilter"
   license "MIT"
-  version "1.3.14"
+  version "1.3.16"
 
   depends_on "jq"
 
   # Prebuilt binaries — no Rust/LLVM build dependencies, installs in seconds.
   # Each tarball contains the panda binary + libonnxruntime dylib bundled together.
   on_arm do
-    url "https://github.com/AssafWoo/PandaFilter/releases/download/v1.3.14/panda-macos-arm64.tar.gz"
-    sha256 "6567f71feb8e70f8990ea881f20609922a1de229268bea72335030b66076a0de"
+    url "https://github.com/AssafWoo/PandaFilter/releases/download/v1.3.16/panda-macos-arm64.tar.gz"
+    sha256 "e8e616fa4c81658657f8207d96f7adba956f6fba392d5c4b01a81fd09dbde8d8"
   end
 
   on_intel do
-    url "https://github.com/AssafWoo/PandaFilter/releases/download/v1.3.14/panda-macos-x86_64.tar.gz"
-    sha256 "9375b1ce97449c6e6f8dd35d4b80adc193722dc44af66e6ee326dab3715c9bee"
+    url "https://github.com/AssafWoo/PandaFilter/releases/download/v1.3.16/panda-macos-x86_64.tar.gz"
+    sha256 "07e35cf45cd9c39d3a38efbec6a90fa9eab04249063ae1f81b53869260b0158d"
   end
 
   def install
