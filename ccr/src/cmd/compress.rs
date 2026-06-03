@@ -18,6 +18,7 @@ pub fn run(
     dry_run: bool,
     scan_session: bool,
     smart: bool,
+    json_output: bool,
 ) -> Result<()> {
     let (raw, source_path) = if scan_session {
         let path = find_latest_jsonl()
@@ -101,6 +102,25 @@ pub fn run(
         return Ok(());
     }
 
+    let saved_pct = if result.tokens_in > 0 {
+        100.0 * (result.tokens_in - result.tokens_out.min(result.tokens_in)) as f64
+            / result.tokens_in as f64
+    } else {
+        0.0
+    };
+
+    // --json: emit structured envelope to stdout regardless of scan_session / -o
+    if json_output {
+        let envelope = serde_json::json!({
+            "messages": result.messages,
+            "tokens_in": result.tokens_in,
+            "tokens_out": result.tokens_out,
+            "savings_pct": saved_pct,
+        });
+        println!("{}", envelope);
+        return Ok(());
+    }
+
     let json = serde_json::to_string_pretty(&result.messages)?;
 
     match &source_path {
@@ -110,9 +130,6 @@ pub fn run(
             std::fs::write(&out_path, &json)
                 .map_err(|e| anyhow::anyhow!("cannot write to '{}': {}", out_path, e))?;
             if result.tokens_in > 0 {
-                let saved_pct =
-                    100.0 * (result.tokens_in - result.tokens_out.min(result.tokens_in)) as f64
-                        / result.tokens_in as f64;
                 eprintln!(
                     "[panda compress] {} → {} tokens ({:.0}% saved)",
                     result.tokens_in, result.tokens_out, saved_pct
@@ -124,9 +141,6 @@ pub fn run(
             write_output(&json, output)?;
             // Stats to stderr so they don't pollute piped output
             if result.tokens_in > 0 {
-                let saved_pct =
-                    100.0 * (result.tokens_in - result.tokens_out.min(result.tokens_in)) as f64
-                        / result.tokens_in as f64;
                 eprintln!(
                     "[panda compress] {} → {} tokens ({:.0}% saved)",
                     result.tokens_in, result.tokens_out, saved_pct
@@ -193,9 +207,14 @@ fn visit_dir(
 /// Parse a JSONL conversation from `~/.claude/projects/`.
 /// Each line is a JSON object with `"type"` and `"message"` fields.
 /// Only `"user"` and `"assistant"` type lines are extracted.
+///
+/// Reads only the last 500 lines to avoid hanging on very large session files.
 fn parse_jsonl_conversation(raw: &str) -> Result<Vec<Message>> {
+    const MAX_LINES: usize = 500;
+    let all_lines: Vec<&str> = raw.lines().collect();
+    let start = all_lines.len().saturating_sub(MAX_LINES);
     let mut messages = Vec::new();
-    for line in raw.lines() {
+    for line in &all_lines[start..] {
         let line = line.trim();
         if line.is_empty() {
             continue;

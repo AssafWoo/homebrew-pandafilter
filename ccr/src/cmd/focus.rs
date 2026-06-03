@@ -414,11 +414,12 @@ fn query_mode(query: &str) -> Result<()> {
         std::process::exit(1);
     }
 
-    // Embed the query
-    let embeddings = panda_core::summarizer::embed_batch(&[query])
-        .map_err(|e| anyhow::anyhow!("embedding failed: {e}"))?;
-    let embedding = embeddings.into_iter().next()
-        .ok_or_else(|| anyhow::anyhow!("no embedding returned"))?;
+    // Embed the query — fall back to zero-vector if daemon is unavailable so
+    // ranking degrades to cochange + role scores rather than failing outright.
+    let embedding = panda_core::summarizer::embed_batch(&[query])
+        .unwrap_or_else(|_| vec![vec![0.0_f32; 384]])
+        .into_iter().next()
+        .unwrap_or_else(|| vec![0.0_f32; 384]);
 
     let conn = rusqlite::Connection::open(&db_path)?;
 

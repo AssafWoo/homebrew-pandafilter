@@ -218,6 +218,10 @@ enum Commands {
         /// regardless of position. Writes to a separate .smart.json file.
         #[arg(long)]
         smart: bool,
+        /// Emit JSON envelope {messages, tokens_in, tokens_out, savings_pct} instead of bare array
+        /// Ideal for SDK mid-loop use: echo $MSGS | panda compress --json --recent-turns 3
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -308,8 +312,8 @@ fn main() {
             }
             Ok(())
         }
-        Commands::Compress { input, output, recent_turns, tier1_turns, ollama, ollama_model, max_tokens, dry_run, scan_session, smart } =>
-            cmd::compress::run(&input, output.as_deref(), recent_turns, tier1_turns, ollama.as_deref(), &ollama_model, max_tokens, dry_run, scan_session, smart),
+        Commands::Compress { input, output, recent_turns, tier1_turns, ollama, ollama_model, max_tokens, dry_run, scan_session, smart, json } =>
+            cmd::compress::run(&input, output.as_deref(), recent_turns, tier1_turns, ollama.as_deref(), &ollama_model, max_tokens, dry_run, scan_session, smart, json),
     };
     if let Err(e) = result {
         eprintln!("panda error: {}", e);
