@@ -7,10 +7,14 @@ pub struct FocusArgs {
     pub disable: bool,
     pub status: bool,
     pub dry_run: bool,
+    pub query: Option<String>,
 }
 
 /// Context Focusing — manage file-relationship graph and guidance.
 pub fn run(args: FocusArgs) -> Result<()> {
+    if let Some(ref q) = args.query {
+        return query_mode(q);
+    }
     match (args.enable, args.disable, args.status, args.dry_run) {
         (true, false, false, false) => enable_focus(),
         (false, true, false, false) => disable_focus(),
@@ -372,6 +376,62 @@ fn hook_mode() -> Result<()> {
             "negative_guidance": guidance.negative_guidance,
             "guidance_text": guidance.guidance_text,
         }
+    });
+
+    println!("{}", output);
+    Ok(())
+}
+
+/// Direct query mode — for SDK / programmatic use.
+///
+/// Unlike hook_mode, this:
+/// - Takes the query as a CLI argument (no stdin JSON dance)
+/// - Skips session-continuity checks (always returns results)
+/// - Skips the small-repo guard (≥1 file is enough)
+/// - Skips assistant-intent blending (no Claude Code session context)
+/// - Returns a clean JSON object: {"files": [...], "guidance_text": "..."}
+///   so callers can prepend guidance_text to the first user message.
+fn query_mode(query: &str) -> Result<()> {
+    use serde_json::json;
+
+    let repo_root = std::env::current_dir()?;
+    let repo_hash = compute_repo_hash(&repo_root)?;
+    let index_parent = get_index_parent(&repo_hash)?;
+
+    let head = match get_current_head(&repo_root) {
+        Ok(h) => h,
+        Err(_) => {
+            eprintln!("panda focus --query: not in a git repository");
+            std::process::exit(1);
+        }
+    };
+
+    let head_dir = index_parent.join(&head);
+    let db_path = head_dir.join("graph.sqlite");
+
+    if !panda_core::focus::graph_is_valid(&db_path) {
+        eprintln!("panda focus --query: no index found. Run `panda index` first.");
+        std::process::exit(1);
+    }
+
+    // Embed the query
+    let embeddings = panda_core::summarizer::embed_batch(&[query])
+        .map_err(|e| anyhow::anyhow!("embedding failed: {e}"))?;
+    let embedding = embeddings.into_iter().next()
+        .ok_or_else(|| anyhow::anyhow!("no embedding returned"))?;
+
+    let conn = rusqlite::Connection::open(&db_path)?;
+
+    let total_files: usize = conn.query_row(
+        "SELECT COUNT(*) FROM files", [], |row| row.get(0)
+    ).unwrap_or(0);
+
+    let ranked = panda_core::focus::query_with_read_boosts(&conn, &embedding, 6, None)?;
+    let guidance = panda_core::focus::assemble(ranked, total_files);
+
+    let output = json!({
+        "files": guidance.recommended_files,
+        "guidance_text": guidance.guidance_text,
     });
 
     println!("{}", output);

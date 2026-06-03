@@ -64,6 +64,9 @@ enum Commands {
         /// Preview guidance without injecting it
         #[arg(long)]
         dry_run: bool,
+        /// Query the index directly and return JSON {files, guidance_text} — for SDK/programmatic use
+        #[arg(long)]
+        query: Option<String>,
     },
     /// Filter stdin to reduce token count
     Filter {
@@ -230,8 +233,8 @@ fn main() {
 
     let cli = Cli::parse();
     let result = match cli.command {
-        Commands::Focus { enable, disable, status, dry_run } => {
-            cmd::focus::run(cmd::focus::FocusArgs { enable, disable, status, dry_run })
+        Commands::Focus { enable, disable, status, dry_run, query } => {
+            cmd::focus::run(cmd::focus::FocusArgs { enable, disable, status, dry_run, query })
         }
         Commands::Filter { command, json } => cmd::filter::run(command, json),
         Commands::Gain { history, days, breakdown, insight, share } => cmd::gain::run(history, days, breakdown, insight, share),
