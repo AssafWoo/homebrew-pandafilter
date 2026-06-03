@@ -16,7 +16,7 @@ fn try_handler(input: &str, hint: &str) -> Option<String> {
     Some(filtered)
 }
 
-pub fn run(command_hint: Option<String>) -> Result<()> {
+pub fn run(command_hint: Option<String>, json_output: bool) -> Result<()> {
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
 
@@ -37,10 +37,26 @@ pub fn run(command_hint: Option<String>) -> Result<()> {
         (result.output, None)
     };
 
-    io::stdout().write_all(output.as_bytes())?;
-
     let input_tokens = panda_core::tokens::count_tokens(&input);
     let output_tokens = panda_core::tokens::count_tokens(&output);
+
+    if json_output {
+        let savings_pct = if input_tokens == 0 {
+            0.0_f32
+        } else {
+            input_tokens.saturating_sub(output_tokens) as f32 / input_tokens as f32 * 100.0
+        };
+        let payload = serde_json::json!({
+            "output": output,
+            "tokens_in": input_tokens,
+            "tokens_out": output_tokens,
+            "savings_pct": savings_pct,
+        });
+        io::stdout().write_all(payload.to_string().as_bytes())?;
+    } else {
+        io::stdout().write_all(output.as_bytes())?;
+    }
+
     let analytics = panda_core::analytics::Analytics::new(
         input_tokens, output_tokens, command_hint.clone(), subcommand, None,
     );

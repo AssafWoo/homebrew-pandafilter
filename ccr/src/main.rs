@@ -70,6 +70,9 @@ enum Commands {
         /// Command hint for selecting filter rules (e.g. cargo, git, npm)
         #[arg(long)]
         command: Option<String>,
+        /// Emit JSON {output, tokens_in, tokens_out, savings_pct} instead of raw text
+        #[arg(long)]
+        json: bool,
     },
     /// Show token savings analytics
     Gain {
@@ -230,7 +233,7 @@ fn main() {
         Commands::Focus { enable, disable, status, dry_run } => {
             cmd::focus::run(cmd::focus::FocusArgs { enable, disable, status, dry_run })
         }
-        Commands::Filter { command } => cmd::filter::run(command),
+        Commands::Filter { command, json } => cmd::filter::run(command, json),
         Commands::Gain { history, days, breakdown, insight, share } => cmd::gain::run(history, days, breakdown, insight, share),
         Commands::Daemon { action } => cmd::daemon::run(action),
         Commands::Doctor => cmd::doctor::run(),

@@ -173,7 +173,7 @@ fn fixtures_dir_from_args(args: &[String]) -> std::path::PathBuf {
                 exe.parent().unwrap()
                     .parent().unwrap()
                     .parent().unwrap()
-                    .join("panda-eval/fixtures")
+                    .join("ccr-eval/fixtures")
                     .to_string_lossy()
                     .into_owned()
             })
