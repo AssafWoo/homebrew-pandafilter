@@ -245,16 +245,20 @@ fn filter_test(output: &str) -> String {
         return filter_test_json(output);
     }
 
-    // Short-circuit: plain-text single-package clean pass.
-    // If there is no FAIL anywhere and there is an "ok " summary line,
-    // return just that summary line — verbose RUN/PASS chatter is noise.
+    // Short-circuit: clean pass (no failures anywhere).
+    // Return only the "ok <pkg>" summary lines — drop all === RUN / --- PASS chatter.
+    // Handles both single-package and multi-package runs.
     let has_fail = output.lines().any(|l| {
         let t = l.trim();
         t.starts_with("FAIL") || t.starts_with("--- FAIL")
     });
     if !has_fail {
-        if let Some(ok_line) = output.lines().find(|l| l.trim_start().starts_with("ok ")) {
-            return format!("{}\n", ok_line.trim_end());
+        let ok_lines: Vec<&str> = output
+            .lines()
+            .filter(|l| l.trim_start().starts_with("ok "))
+            .collect();
+        if !ok_lines.is_empty() {
+            return format!("{}\n", ok_lines.join("\n").trim_end());
         }
     }
 

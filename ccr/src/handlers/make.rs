@@ -48,6 +48,24 @@ impl Handler for MakeHandler {
     }
 
     fn filter(&self, output: &str, _args: &[String]) -> String {
+        // Delegate to GoHandler when the output is Go test output (e.g. `make test` wrapping `go test`).
+        // GoHandler has proper semantic compression: compact per-package summaries, failure details,
+        // pass counts. MakeHandler's generic "last 5 lines + [make: complete]" loses that context.
+        let is_go_test_output = output.lines().any(|l| {
+            let t = l.trim();
+            t.starts_with("=== RUN")
+                || t.starts_with("--- PASS")
+                || t.starts_with("--- FAIL")
+                || t.starts_with("--- SKIP")
+                || (t.starts_with('{') && t.contains("\"Action\""))
+        });
+        if is_go_test_output {
+            return super::go::GoHandler.filter(
+                output,
+                &["go".to_string(), "test".to_string()],
+            );
+        }
+
         const MAKE_RULES: &[util::MatchOutputRule] = &[util::MatchOutputRule {
             success_pattern: r"(?i)nothing to be done|build ok|all targets up to date",
             error_pattern: r"(?i)\*\*\* \[|: error:|make.*Error",
