@@ -1,6 +1,6 @@
 [package]
 name = "panda"
-version = "1.3.23"
+version = "1.3.24"
 edition = "2021"
 
 [[bin]]
