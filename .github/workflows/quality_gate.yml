@@ -1,0 +1,65 @@
+name: Quality Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  quality-gate:
+    name: Compression Quality Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-qg-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-qg-
+
+      # Node is required for express npm test / npm audit / npm ls
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install express dependencies
+        run: npm install --prefer-offline
+        working-directory: ccr-eval/benchmarks/repos/express
+
+      # Debug build is intentional: compression logic is identical to release,
+      # and the latency gate is soft-only (warn, never fail), so the slower
+      # debug binary does not cause false failures.
+      - name: Build panda
+        run: cargo build -p panda
+
+      - name: Run quality gate
+        run: |
+          python3 ccr-eval/benchmarks/quality_gate.py \
+            --panda target/debug/panda \
+            --baseline ccr-eval/benchmarks/baseline.json \
+            --ci \
+            --report-dir /tmp/qg-report
+
+      # Always upload the report so per-command deltas are visible
+      # on every run — pass or fail.
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-gate-report-${{ github.run_number }}
+          path: /tmp/qg-report/
+          retention-days: 90

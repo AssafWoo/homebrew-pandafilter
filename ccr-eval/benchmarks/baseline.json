@@ -1,0 +1,341 @@
+{
+  "_note": "PandaFilter Quality Gate baseline. Update with: python3 quality_gate.py --update-baseline [--panda target/release/panda]",
+  "version": "1.3.22",
+  "generated": "2026-06-12T10:02:10.261960+00:00",
+  "thresholds": {
+    "overall_regression_pct": -2.0,
+    "per_command_regression_pct": -5.0,
+    "latency_warn_ms": 200.0
+  },
+  "commands": [
+    {
+      "repo": "express",
+      "category": "test",
+      "label": "npm test",
+      "raw_chars": 65697,
+      "savings_pct": 99.694,
+      "elapsed_ms": 92.0
+    },
+    {
+      "repo": "express",
+      "category": "lint",
+      "label": "npm audit",
+      "raw_chars": 2604,
+      "savings_pct": 95.469,
+      "elapsed_ms": 73.6
+    },
+    {
+      "repo": "express",
+      "category": "deps",
+      "label": "npm ls --depth=1",
+      "raw_chars": 5286,
+      "savings_pct": 69.939,
+      "elapsed_ms": 1207.5
+    },
+    {
+      "repo": "express",
+      "category": "deps",
+      "label": "cat package.json",
+      "raw_chars": 2730,
+      "savings_pct": 35.495,
+      "elapsed_ms": 768.8
+    },
+    {
+      "repo": "express",
+      "category": "explore",
+      "label": "find js files",
+      "raw_chars": 1825,
+      "savings_pct": 1.699,
+      "elapsed_ms": 63.3
+    },
+    {
+      "repo": "express",
+      "category": "explore",
+      "label": "grep function lib/",
+      "raw_chars": 9548,
+      "savings_pct": 19.983,
+      "elapsed_ms": 65.1
+    },
+    {
+      "repo": "express",
+      "category": "explore",
+      "label": "git log -20",
+      "raw_chars": 73,
+      "savings_pct": 0.0,
+      "elapsed_ms": 64.3
+    },
+    {
+      "repo": "express",
+      "category": "explore",
+      "label": "git show HEAD stat",
+      "raw_chars": 13509,
+      "savings_pct": 77.711,
+      "elapsed_ms": 796.6
+    },
+    {
+      "repo": "flask",
+      "category": "explore",
+      "label": "grep def src/",
+      "raw_chars": 30641,
+      "savings_pct": 65.409,
+      "elapsed_ms": 68.4
+    },
+    {
+      "repo": "flask",
+      "category": "explore",
+      "label": "find py files",
+      "raw_chars": 2499,
+      "savings_pct": 40.696,
+      "elapsed_ms": 62.7
+    },
+    {
+      "repo": "flask",
+      "category": "deps",
+      "label": "cat pyproject.toml",
+      "raw_chars": 6556,
+      "savings_pct": 68.655,
+      "elapsed_ms": 63.3
+    },
+    {
+      "repo": "flask",
+      "category": "explore",
+      "label": "git log -20",
+      "raw_chars": 40,
+      "savings_pct": 0.0,
+      "elapsed_ms": 63.5
+    },
+    {
+      "repo": "flask",
+      "category": "explore",
+      "label": "git show HEAD stat",
+      "raw_chars": 14930,
+      "savings_pct": 78.406,
+      "elapsed_ms": 570.9
+    },
+    {
+      "repo": "fastapi",
+      "category": "explore",
+      "label": "grep def fastapi/",
+      "raw_chars": 23851,
+      "savings_pct": 55.993,
+      "elapsed_ms": 67.0
+    },
+    {
+      "repo": "fastapi",
+      "category": "explore",
+      "label": "grep class fastapi/",
+      "raw_chars": 11938,
+      "savings_pct": 22.114,
+      "elapsed_ms": 64.9
+    },
+    {
+      "repo": "fastapi",
+      "category": "explore",
+      "label": "find py files",
+      "raw_chars": 2883,
+      "savings_pct": 46.41,
+      "elapsed_ms": 62.9
+    },
+    {
+      "repo": "fastapi",
+      "category": "deps",
+      "label": "cat pyproject.toml",
+      "raw_chars": 10384,
+      "savings_pct": 72.756,
+      "elapsed_ms": 64.1
+    },
+    {
+      "repo": "fastapi",
+      "category": "explore",
+      "label": "git log -20",
+      "raw_chars": 41,
+      "savings_pct": 0.0,
+      "elapsed_ms": 63.9
+    },
+    {
+      "repo": "gin",
+      "category": "explore",
+      "label": "grep func *.go",
+      "raw_chars": 39986,
+      "savings_pct": 66.918,
+      "elapsed_ms": 70.9
+    },
+    {
+      "repo": "gin",
+      "category": "explore",
+      "label": "grep func Test",
+      "raw_chars": 44940,
+      "savings_pct": 74.401,
+      "elapsed_ms": 71.2
+    },
+    {
+      "repo": "gin",
+      "category": "deps",
+      "label": "cat go.mod",
+      "raw_chars": 1599,
+      "savings_pct": 0.0,
+      "elapsed_ms": 65.8
+    },
+    {
+      "repo": "gin",
+      "category": "explore",
+      "label": "cat README.md",
+      "raw_chars": 11755,
+      "savings_pct": 60.978,
+      "elapsed_ms": 70.3
+    },
+    {
+      "repo": "gin",
+      "category": "explore",
+      "label": "git log -20",
+      "raw_chars": 92,
+      "savings_pct": 0.0,
+      "elapsed_ms": 63.7
+    },
+    {
+      "repo": "gin",
+      "category": "explore",
+      "label": "git show HEAD stat",
+      "raw_chars": 7770,
+      "savings_pct": 66.641,
+      "elapsed_ms": 533.4
+    },
+    {
+      "repo": "rust-analyzer",
+      "category": "explore",
+      "label": "find rs files",
+      "raw_chars": 3280,
+      "savings_pct": 61.189,
+      "elapsed_ms": 63.1
+    },
+    {
+      "repo": "rust-analyzer",
+      "category": "explore",
+      "label": "grep pub fn",
+      "raw_chars": 5375,
+      "savings_pct": 17.544,
+      "elapsed_ms": 65.1
+    },
+    {
+      "repo": "rust-analyzer",
+      "category": "deps",
+      "label": "cat Cargo.toml",
+      "raw_chars": 8265,
+      "savings_pct": 72.632,
+      "elapsed_ms": 64.5
+    },
+    {
+      "repo": "rust-analyzer",
+      "category": "explore",
+      "label": "git log -20",
+      "raw_chars": 83,
+      "savings_pct": 0.0,
+      "elapsed_ms": 63.9
+    },
+    {
+      "repo": "rails",
+      "category": "explore",
+      "label": "find rb files",
+      "raw_chars": 3808,
+      "savings_pct": 70.142,
+      "elapsed_ms": 62.3
+    },
+    {
+      "repo": "rails",
+      "category": "explore",
+      "label": "grep def activerecord/",
+      "raw_chars": 4871,
+      "savings_pct": 35.763,
+      "elapsed_ms": 63.3
+    },
+    {
+      "repo": "rails",
+      "category": "explore",
+      "label": "git log -20",
+      "raw_chars": 101,
+      "savings_pct": 0.99,
+      "elapsed_ms": 62.6
+    },
+    {
+      "repo": "rails",
+      "category": "explore",
+      "label": "git show HEAD stat",
+      "raw_chars": 302001,
+      "savings_pct": 98.627,
+      "elapsed_ms": 3027.6
+    },
+    {
+      "repo": "vue-core",
+      "category": "explore",
+      "label": "find ts files",
+      "raw_chars": 3714,
+      "savings_pct": 66.855,
+      "elapsed_ms": 66.4
+    },
+    {
+      "repo": "vue-core",
+      "category": "explore",
+      "label": "grep export function",
+      "raw_chars": 4234,
+      "savings_pct": 25.886,
+      "elapsed_ms": 64.1
+    },
+    {
+      "repo": "vue-core",
+      "category": "deps",
+      "label": "cat package.json",
+      "raw_chars": 5086,
+      "savings_pct": 21.903,
+      "elapsed_ms": 66.4
+    },
+    {
+      "repo": "vue-core",
+      "category": "explore",
+      "label": "git log -20",
+      "raw_chars": 61,
+      "savings_pct": 0.0,
+      "elapsed_ms": 64.9
+    },
+    {
+      "repo": "svelte",
+      "category": "explore",
+      "label": "find svelte files",
+      "raw_chars": 5012,
+      "savings_pct": 44.812,
+      "elapsed_ms": 64.9
+    },
+    {
+      "repo": "svelte",
+      "category": "explore",
+      "label": "grep export function",
+      "raw_chars": 4051,
+      "savings_pct": 34.658,
+      "elapsed_ms": 64.4
+    },
+    {
+      "repo": "svelte",
+      "category": "explore",
+      "label": "git log -20",
+      "raw_chars": 80,
+      "savings_pct": 0.0,
+      "elapsed_ms": 63.6
+    },
+    {
+      "repo": "svelte",
+      "category": "explore",
+      "label": "git show HEAD stat",
+      "raw_chars": 535342,
+      "savings_pct": 99.273,
+      "elapsed_ms": 1687.5
+    }
+  ],
+  "aggregate": {
+    "overall_weighted_savings_pct": 89.491,
+    "by_category": {
+      "deps": 59.738,
+      "explore": 89.951,
+      "lint": 95.469,
+      "test": 99.694
+    }
+  }
+}
