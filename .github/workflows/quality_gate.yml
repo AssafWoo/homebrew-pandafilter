@@ -43,7 +43,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ccr-eval/benchmarks/repos
-          key: qg-repos-8e022edc-916edab5-2ac89889-d3ffc998-ef95886e-8eb5cb9f-8e731906-7df0edd4
+          key: qg-repos-d1-8e022edc-916edab5-2ac89889-d3ffc998-ef95886e-8eb5cb9f-8e731906-7df0edd4
 
       - name: Clone benchmark repos (pinned)
         run: |
@@ -57,7 +57,12 @@ jobs:
             fi
             git init -q "$name"
             git -C "$name" remote add origin "$url"
-            git -C "$name" fetch --depth=50 origin "$sha"
+            # depth=1 is load-bearing: baseline.json was generated against
+            # depth-1 clones, where `git show HEAD --stat` on a grafted
+            # parentless commit prints the full tree stat and `git log -20`
+            # returns a single line. Deeper history changes those outputs
+            # and produces false savings regressions.
+            git -C "$name" fetch --depth=1 origin "$sha"
             git -C "$name" checkout -q --detach FETCH_HEAD
           done <<'EOF'
           express https://github.com/expressjs/express.git 8e022edc9185f540a3fcecaf5e56b850d919cdac
