@@ -36,13 +36,39 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Clone benchmark repos
+      # Benchmark repos are pinned to the exact SHAs baseline.json was
+      # generated against — unpinned HEADs drift and produce false
+      # compression regressions. Cached so later runs skip the clones.
+      - name: Cache benchmark repos
+        uses: actions/cache@v4
+        with:
+          path: ccr-eval/benchmarks/repos
+          key: qg-repos-8e022edc-916edab5-2ac89889-d3ffc998-ef95886e-8eb5cb9f-8e731906-7df0edd4
+
+      - name: Clone benchmark repos (pinned)
         run: |
+          set -euo pipefail
           mkdir -p ccr-eval/benchmarks/repos
-          git clone --depth=50 https://github.com/expressjs/express.git  ccr-eval/benchmarks/repos/express
-          git clone --depth=50 https://github.com/pallets/flask.git      ccr-eval/benchmarks/repos/flask
-          git clone --depth=50 https://github.com/tiangolo/fastapi.git   ccr-eval/benchmarks/repos/fastapi
-          git clone --depth=50 https://github.com/gin-gonic/gin.git      ccr-eval/benchmarks/repos/gin
+          cd ccr-eval/benchmarks/repos
+          while read -r name url sha; do
+            if [ -d "$name/.git" ]; then
+              echo "$name already present (cache hit), skipping"
+              continue
+            fi
+            git init -q "$name"
+            git -C "$name" remote add origin "$url"
+            git -C "$name" fetch --depth=50 origin "$sha"
+            git -C "$name" checkout -q --detach FETCH_HEAD
+          done <<'EOF'
+          express https://github.com/expressjs/express.git 8e022edc9185f540a3fcecaf5e56b850d919cdac
+          fastapi https://github.com/fastapi/fastapi.git 916edab52685d6275f67017aab9905cabd8b9cae
+          flask https://github.com/pallets/flask.git 2ac89889f4cc330eabd50f295dcef02828522c69
+          gin https://github.com/gin-gonic/gin.git d3ffc9985281dcf4d3bef604cce4e662b1a327a6
+          rails https://github.com/rails/rails.git ef95886ef996db20ddc05f2d1c8c7342b05121e6
+          rust-analyzer https://github.com/rust-lang/rust-analyzer.git 8eb5cb9fcc8a016ecdfe900b7ff2671c4b94cb9f
+          svelte https://github.com/sveltejs/svelte.git 8e7319063aa609cca2cbf8cdf1958e5392dd2fa0
+          vue-core https://github.com/vuejs/core.git 7df0edd46c1636751750588d8db2fafd2ef68443
+          EOF
 
       - name: Install express dependencies
         run: npm install --prefer-offline
