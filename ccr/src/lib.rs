@@ -2,6 +2,7 @@
 pub mod bert_budget;
 pub mod config_loader;
 pub mod error_signatures;
+pub mod feedback;
 pub mod filter_trust;
 pub mod staleness;
 pub mod handlers;

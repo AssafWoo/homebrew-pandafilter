@@ -325,12 +325,88 @@ fn handle_connection(mut stream: std::os::unix::net::UnixStream) {
     let _ = stream.write_all(&resp_bytes);
 }
 
+// ── Daemon-side embedding cache ───────────────────────────────────────────────
+// Keyed by hash(text, normalize). Dev loops re-send the same lines constantly
+// (recurring warnings, paths, test names), so hit rates in real sessions are
+// high and the cache turns most embed requests into pure memory lookups.
+// Override capacity with PANDA_EMBED_CACHE_CAP (0 disables the cache).
+
+static EMBED_CACHE: std::sync::OnceLock<std::sync::Mutex<panda_core::embed_cache::EmbedCache>> =
+    std::sync::OnceLock::new();
+
+fn embed_cache_capacity() -> usize {
+    std::env::var("PANDA_EMBED_CACHE_CAP")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(panda_core::embed_cache::DEFAULT_CAPACITY)
+}
+
+fn embed_cache() -> Option<&'static std::sync::Mutex<panda_core::embed_cache::EmbedCache>> {
+    let cap = embed_cache_capacity();
+    if cap == 0 {
+        return None;
+    }
+    Some(EMBED_CACHE.get_or_init(|| {
+        std::sync::Mutex::new(panda_core::embed_cache::EmbedCache::new(cap))
+    }))
+}
+
+fn embed_uncached(texts: Vec<&str>, normalize: bool) -> Result<Vec<Vec<f32>>> {
+    Ok(if normalize {
+        panda_core::summarizer::embed_direct(texts)?
+    } else {
+        panda_core::summarizer::embed_raw(texts)?
+    })
+}
+
+/// Embed `texts`, serving repeats from the cache and computing only misses.
+/// The cache lock is released while the model runs so concurrent connections
+/// with full cache hits are never blocked behind an inference pass.
+fn embed_cached(texts: &[&str], normalize: bool) -> Result<Vec<Vec<f32>>> {
+    let cache = match embed_cache() {
+        Some(c) => c,
+        None => return embed_uncached(texts.to_vec(), normalize),
+    };
+
+    let (mut found, miss_indices) = cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .lookup_batch(texts, normalize);
+
+    if !miss_indices.is_empty() {
+        let miss_texts: Vec<&str> = miss_indices.iter().map(|&i| texts[i]).collect();
+        let computed = embed_uncached(miss_texts, normalize)?;
+
+        let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        for (&i, emb) in miss_indices.iter().zip(computed.into_iter()) {
+            guard.insert(panda_core::embed_cache::cache_key(texts[i], normalize), emb.clone());
+            found[i] = Some(emb);
+        }
+    }
+
+    // Every slot is Some now: hits were filled by lookup_batch, misses just above.
+    Ok(found.into_iter().map(|e| e.unwrap_or_default()).collect())
+}
+
 fn process_request(req_buf: &[u8]) -> Result<serde_json::Value> {
     let req: serde_json::Value = serde_json::from_slice(req_buf)?;
 
     // Health-check ping — lightweight round-trip to verify daemon is alive and responsive.
+    // Includes cache stats so `panda daemon status` and benchmarks can observe hit rates.
     if req.get("ping").and_then(|v| v.as_bool()) == Some(true) {
-        return Ok(serde_json::json!({"ok": true, "pong": true}));
+        let (size, hits, misses) = embed_cache()
+            .map(|c| {
+                let g = c.lock().unwrap_or_else(|e| e.into_inner());
+                (g.len() as u64, g.hits, g.misses)
+            })
+            .unwrap_or((0, 0, 0));
+        return Ok(serde_json::json!({
+            "ok": true,
+            "pong": true,
+            "cache_size": size,
+            "cache_hits": hits,
+            "cache_misses": misses,
+        }));
     }
 
     let texts: Vec<String> = req
@@ -352,11 +428,7 @@ fn process_request(req_buf: &[u8]) -> Result<serde_json::Value> {
 
     let normalize = req.get("normalize").and_then(|v| v.as_bool()).unwrap_or(true);
     let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-    let embeddings = if normalize {
-        panda_core::summarizer::embed_direct(text_refs)?
-    } else {
-        panda_core::summarizer::embed_raw(text_refs)?
-    };
+    let embeddings = embed_cached(&text_refs, normalize)?;
 
     Ok(serde_json::json!({
         "ok": true,

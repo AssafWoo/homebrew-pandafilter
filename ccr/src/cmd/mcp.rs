@@ -176,6 +176,25 @@ fn handle_tools_list(id: Value) -> Value {
                     }
                 },
                 {
+                    "name": "query_session",
+                    "description": "Semantic search over this session's tool outputs (commands run, files read). Use before re-running a command or re-reading a file to check whether the answer is already in session memory. Returns the top-k matching session entries with command, age, and a content preview.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Natural language description of the content you're looking for"
+                            },
+                            "top_k": {
+                                "type": "integer",
+                                "description": "Maximum number of results to return (default: 5)",
+                                "default": 5
+                            }
+                        },
+                        "required": ["query"]
+                    }
+                },
+                {
                     "name": "compress_output",
                     "description": "Compress shell command output to reduce token usage. Pass the raw command output and an optional command hint (e.g. 'cargo build', 'git log') to get handler-optimized compression. Returns the compressed text and token savings.",
                     "inputSchema": {
@@ -215,6 +234,7 @@ fn handle_tools_call(id: Value, params: &Value, index: &Option<DbIndex>) -> Valu
         "file_signatures"  => tool_file_signatures(&args, index),
         "file_impact"      => tool_file_impact(&args, index),
         "index_status"     => tool_index_status(index),
+        "query_session"    => tool_query_session(&args),
         "compress_output"  => tool_compress_output(&args),
         other => Err(anyhow::anyhow!("Unknown tool: {other}")),
     };
@@ -278,6 +298,78 @@ fn tool_query_files(args: &Value, index: &Option<DbIndex>) -> Result<String> {
         out.push_str(&format!(
             "{}. {} (score: {:.3}, role: {}, cochanges: {})\n",
             i + 1, f.path, f.relevance_score, f.role, f.cochange_count
+        ));
+    }
+
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Tool: query_session
+// ---------------------------------------------------------------------------
+
+/// The MCP server runs as its own process without PANDA_SESSION_ID, so when
+/// the env var is absent fall back to the most recently modified session
+/// file — the session the user is actively working in.
+fn active_session_id() -> Option<String> {
+    if let Ok(sid) = std::env::var("PANDA_SESSION_ID") {
+        return Some(sid);
+    }
+    let sessions_dir = dirs::data_local_dir()?.join("panda").join("sessions");
+    let mut newest: Option<(std::time::SystemTime, String)> = None;
+    for entry in std::fs::read_dir(sessions_dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let mtime = entry.metadata().ok()?.modified().ok()?;
+        let id = path.file_stem()?.to_str()?.to_string();
+        if newest.as_ref().map_or(true, |(t, _)| mtime > *t) {
+            newest = Some((mtime, id));
+        }
+    }
+    newest.map(|(_, id)| id)
+}
+
+fn tool_query_session(args: &Value) -> Result<String> {
+    let query = args.get("query")
+        .and_then(|q| q.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Missing required argument: query"))?;
+
+    let top_k = args.get("top_k")
+        .and_then(|k| k.as_u64())
+        .unwrap_or(5) as usize;
+    let top_k = top_k.clamp(1, 20);
+
+    let sid = active_session_id()
+        .ok_or_else(|| anyhow::anyhow!("No session found. Run a command through panda first."))?;
+    let session = crate::session::SessionState::load(&sid);
+    if session.entries.is_empty() {
+        return Ok("Session memory is empty — no tool outputs recorded yet.".to_string());
+    }
+
+    let embeddings = panda_core::summarizer::embed_batch(&[query])
+        .map_err(|e| anyhow::anyhow!("Embedding failed: {e}"))?;
+    let query_emb = embeddings.into_iter().next()
+        .ok_or_else(|| anyhow::anyhow!("Embedding returned empty result"))?;
+
+    let results = session.query_semantic(&query_emb, top_k);
+    if results.is_empty() {
+        return Ok("No semantically similar entries in session memory.".to_string());
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let mut out = format!("Top {} session entries for: \"{}\"\n\n", results.len(), query);
+    for (i, (score, entry)) in results.iter().enumerate() {
+        let age = crate::session::format_age(now.saturating_sub(entry.ts));
+        let preview: String = entry.content_preview.chars().take(300).collect();
+        out.push_str(&format!(
+            "{}. [turn {}, {} ago, score {:.3}] `{}` ({} tokens)\n{}\n\n",
+            i + 1, entry.turn, age, score, entry.cmd, entry.tokens, preview.trim_end()
         ));
     }
 

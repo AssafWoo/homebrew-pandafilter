@@ -368,6 +368,13 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         output_text.clone()
     };
 
+    // FB: feedback-tuned keep threshold. Commands whose zoom blocks keep
+    // getting expanded are over-compressed → lower the keep threshold so more
+    // lines survive. Skipped in clean-room mode to keep evaluations unbiased.
+    if !clean_room {
+        panda_core::summarizer::set_keep_threshold_scale(crate::feedback::keep_scale(&cmd_key));
+    }
+
     let pipeline = panda_core::pipeline::Pipeline::new(config.with_pressure(pressure));
     let mut result = match pipeline.process(
         &filtered_text,
@@ -394,12 +401,23 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
 
     // Enrich zoom block labels with content-derived categories before persisting.
     result.output = enrich_zoom_labels(&result.output, &result.zoom_blocks);
-    let _ = crate::zoom_store::save_blocks(&sid, result.zoom_blocks);
+    let _ = crate::zoom_store::save_blocks(&sid, result.zoom_blocks, Some(&cmd_key));
 
     // ── Error-loop detection ──────────────────────────────────────────────────
     // Parse error signatures from pipeline output BEFORE any session-aware passes.
     // Stored early so they reflect the actual errors, not compressed summaries.
     let current_error_set = crate::error_signatures::ErrorSet::from_output(&result.output);
+
+    // ── Cross-session knowledge (KS) ─────────────────────────────────────────
+    // Errors recur across sessions; their fixes shouldn't be rediscovered.
+    // When a known, previously-resolved error reappears, inject a one-line
+    // hint. When this run clears errors the previous run of the same command
+    // had, record the session's edited files as the resolution.
+    if !clean_room {
+        if let Some(hint) = apply_knowledge_store(&cmd_key, &current_error_set, &session) {
+            result.output = format!("{}\n{}", hint, result.output);
+        }
+    }
 
     // If the same command has produced overlapping errors before, replace output
     // with a structural diff (fixed / new / unchanged). Falls through to C3 when:
@@ -413,7 +431,7 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     ) {
         let errloop_blocks = panda_core::zoom::drain();
         if !errloop_blocks.is_empty() {
-            let _ = crate::zoom_store::save_blocks(&sid, errloop_blocks);
+            let _ = crate::zoom_store::save_blocks(&sid, errloop_blocks, Some(&cmd_key));
         }
         result.output = loop_output;
     }
@@ -527,7 +545,7 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
 
         let xdedup_blocks = panda_core::zoom::drain();
         if !xdedup_blocks.is_empty() {
-            let _ = crate::zoom_store::save_blocks(&sid, xdedup_blocks);
+            let _ = crate::zoom_store::save_blocks(&sid, xdedup_blocks, Some(&cmd_key));
         }
 
         let compression_factor = if clean_room { 1.0 } else { session.compression_factor() };
@@ -958,7 +976,7 @@ fn process_read(hook_input: HookInput) -> Result<Option<String>> {
             try_focus_compress(&file_path, &output_text, &session, line_count)
         {
             let zoom_blocks = panda_core::zoom::drain();
-            let _ = crate::zoom_store::save_blocks(&sid, zoom_blocks);
+            let _ = crate::zoom_store::save_blocks(&sid, zoom_blocks, Some("(read)"));
 
             if crate::bert_budget::try_consume() {
                 if let Ok(mut embs) =
@@ -1007,7 +1025,7 @@ fn process_read(hook_input: HookInput) -> Result<Option<String>> {
         Err(_) => return Ok(None),
     };
 
-    let _ = crate::zoom_store::save_blocks(&sid, result.zoom_blocks);
+    let _ = crate::zoom_store::save_blocks(&sid, result.zoom_blocks, Some("(read)"));
 
     // 3.3: Edit-aware compression — preserve context around recently-edited areas
     let pipeline_output = {
@@ -1239,6 +1257,68 @@ fn process_glob(hook_input: HookInput) -> Result<Option<String>> {
     Ok(Some(serde_json::to_string(&hook_output)?))
 }
 
+// ── Cross-session knowledge store (KS) ───────────────────────────────────────
+
+/// Record error occurrences/resolutions in the cross-session knowledge store
+/// and return recurrence hint lines (joined) when a previously-resolved error
+/// reappears. Best-effort: any storage failure returns None and is ignored.
+fn apply_knowledge_store(
+    cmd_key: &str,
+    current_error_set: &crate::error_signatures::ErrorSet,
+    session: &crate::session::SessionState,
+) -> Option<String> {
+    let conn = crate::knowledge::open().ok()?;
+    let project = crate::analytics_db::current_project_path();
+
+    if !current_error_set.is_empty() {
+        let keys: Vec<String> = current_error_set
+            .signatures
+            .iter()
+            .map(|s| s.key())
+            .collect();
+
+        // Hints first, so this occurrence doesn't inflate its own count.
+        let hints = crate::knowledge::recurrence_hints(&conn, &project, &keys)
+            .unwrap_or_default();
+
+        let pairs: Vec<(String, String)> = current_error_set
+            .signatures
+            .iter()
+            .map(|s| {
+                // First raw line is the most readable one-line description.
+                let display = s
+                    .raw_lines
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| s.display());
+                (s.key(), display.chars().take(200).collect())
+            })
+            .collect();
+        let _ = crate::knowledge::record_errors(&conn, &project, &pairs);
+
+        if hints.is_empty() {
+            None
+        } else {
+            Some(hints.join("\n"))
+        }
+    } else {
+        // No errors now — if the *immediately previous* run of this command
+        // had errors, they were just resolved by whatever was edited this
+        // session. Older errored entries don't count: their resolution was
+        // already attributed when the first clean run followed them.
+        let last_entry = session.entries.iter().rev().find(|e| e.cmd == cmd_key)?;
+        let prior_sigs = last_entry.error_signatures.as_deref()?;
+        let prior = crate::error_signatures::ErrorSet::from_storage(prior_sigs);
+        if prior.is_empty() {
+            return None;
+        }
+        let keys: Vec<String> = prior.signatures.iter().map(|s| s.key()).collect();
+        let edited: Vec<String> = session.recent_edits.keys().cloned().collect();
+        let _ = crate::knowledge::record_resolutions(&conn, &project, &keys, &edited);
+        None
+    }
+}
+
 // ── Grep tool handler ─────────────────────────────────────────────────────────
 
 fn process_grep(hook_input: HookInput) -> Result<Option<String>> {
@@ -1269,6 +1349,10 @@ fn process_grep(hook_input: HookInput) -> Result<Option<String>> {
     let args: Vec<String> = vec!["grep".to_string(), pattern];
     let filtered = handler.filter(&output_text, &args);
 
+    // Explore-gap dedup: collapse hit groups that fall inside file sections
+    // the agent has already read this session.
+    let filtered = apply_grep_context_dedup(&filtered);
+
     let input_tokens = panda_core::tokens::count_tokens(&output_text);
     let output_tokens = panda_core::tokens::count_tokens(&filtered);
     let analytics = panda_core::analytics::Analytics::new(
@@ -1282,6 +1366,161 @@ fn process_grep(hook_input: HookInput) -> Result<Option<String>> {
 
     let hook_output = HookOutput { output: filtered };
     Ok(Some(serde_json::to_string(&hook_output)?))
+}
+
+// ── Grep context dedup (explore gap) ──────────────────────────────────────────
+
+/// Minimum hits in a per-file group before it's worth an embedding call.
+const GREP_DEDUP_MIN_GROUP_LINES: usize = 3;
+/// Similarity to an already-read section that marks a hit group as redundant.
+/// Higher than the cross-file dedup threshold (0.80): grep lines carry
+/// path/line-number noise even after prefix stripping.
+const GREP_DEDUP_SIM_THRESHOLD: f32 = 0.82;
+/// Never suppress more than this fraction of the output — a grep where
+/// everything is "already read" should still show the match locations.
+const GREP_DEDUP_MAX_SUPPRESS_RATIO: f32 = 0.60;
+
+/// Strip the `path:` / `path:lineno:` prefix from a grep content line so the
+/// embedding compares match *content* against read file sections.
+fn grep_line_content(line: &str) -> &str {
+    let mut rest = line;
+    for _ in 0..2 {
+        match rest.split_once(':') {
+            Some((head, tail))
+                if !head.is_empty()
+                    && (head.contains('/')
+                        || head.contains('.')
+                        || head.chars().all(|c| c.is_ascii_digit())) =>
+            {
+                rest = tail;
+            }
+            _ => break,
+        }
+    }
+    rest
+}
+
+/// Leading file path of a grep output line, when the line has the
+/// `path:...` shape. Used to group consecutive hits per file.
+fn grep_line_path(line: &str) -> Option<&str> {
+    let head = line.split(':').next()?;
+    if head.is_empty() || head.contains(' ') {
+        return None;
+    }
+    if head.contains('/') || head.contains('.') {
+        Some(head)
+    } else {
+        None
+    }
+}
+
+/// Collapse grep hit groups whose content the agent has already read this
+/// session (cosine ≥ threshold against stored read-section embeddings).
+/// Suppressed groups become one-line markers with a zoom expand ID.
+fn apply_grep_context_dedup(filtered: &str) -> String {
+    let sid = crate::session::session_id();
+    let session = crate::session::SessionState::load(&sid);
+    if session.read_section_embeddings.is_empty() {
+        return filtered.to_string();
+    }
+
+    let lines: Vec<&str> = filtered.lines().collect();
+    if lines.len() < 15 {
+        return filtered.to_string();
+    }
+
+    // Group consecutive lines by file path prefix.
+    // (path, start_idx, end_idx_exclusive)
+    let mut groups: Vec<(String, usize, usize)> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        match grep_line_path(line) {
+            Some(path) => match groups.last_mut() {
+                Some((gpath, _, end)) if gpath == path && *end == i => *end = i + 1,
+                _ => groups.push((path.to_string(), i, i + 1)),
+            },
+            None => {}
+        }
+    }
+
+    let candidates: Vec<&(String, usize, usize)> = groups
+        .iter()
+        .filter(|(_, s, e)| e - s >= GREP_DEDUP_MIN_GROUP_LINES)
+        .collect();
+    if candidates.is_empty() {
+        return filtered.to_string();
+    }
+
+    if !crate::bert_budget::try_consume() {
+        return filtered.to_string();
+    }
+    let texts: Vec<String> = candidates
+        .iter()
+        .map(|(_, s, e)| {
+            lines[*s..*e]
+                .iter()
+                .map(|l| grep_line_content(l))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .collect();
+    let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+    let embeddings = match panda_core::summarizer::embed_batch(&text_refs) {
+        Ok(e) => e,
+        Err(_) => return filtered.to_string(),
+    };
+
+    let suppress_budget =
+        (lines.len() as f32 * GREP_DEDUP_MAX_SUPPRESS_RATIO) as usize;
+    let mut suppressed_lines = 0usize;
+    let mut suppress: std::collections::HashMap<usize, String> =
+        std::collections::HashMap::new();
+
+    panda_core::zoom::enable();
+    for ((path, s, e), emb) in candidates.iter().zip(embeddings.iter()) {
+        let group_len = e - s;
+        if suppressed_lines + group_len > suppress_budget {
+            continue;
+        }
+        if session.is_section_seen(emb, GREP_DEDUP_SIM_THRESHOLD) {
+            let zi = panda_core::zoom::register(
+                lines[*s..*e].iter().map(|l| l.to_string()).collect(),
+            );
+            suppress.insert(
+                *s,
+                format!(
+                    "[{}: {} matches in already-read context — panda expand {}]",
+                    path, group_len, zi
+                ),
+            );
+            suppressed_lines += group_len;
+        }
+    }
+
+    let blocks = panda_core::zoom::drain();
+    if suppress.is_empty() {
+        return filtered.to_string();
+    }
+    let _ = crate::zoom_store::save_blocks(&sid, blocks, Some("(grep)"));
+
+    // Rebuild: replace each suppressed group with its marker.
+    let suppressed_ranges: std::collections::HashMap<usize, usize> = groups
+        .iter()
+        .filter(|(_, s, _)| suppress.contains_key(s))
+        .map(|(_, s, e)| (*s, *e))
+        .collect();
+
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        if let Some(marker) = suppress.get(&i) {
+            out.push(marker.clone());
+            i = suppressed_ranges[&i];
+        } else {
+            out.push(lines[i].to_string());
+            i += 1;
+        }
+    }
+    out.join("\n")
 }
 
 // ── Sentence dedup (C1) ───────────────────────────────────────────────────────
@@ -2094,7 +2333,7 @@ fn process_webfetch(hook_input: HookInput) -> Result<Option<String>> {
     // Drain and save any zoom blocks registered during summarization
     let web_blocks = panda_core::zoom::drain();
     if !web_blocks.is_empty() {
-        let _ = crate::zoom_store::save_blocks(&sid, web_blocks);
+        let _ = crate::zoom_store::save_blocks(&sid, web_blocks, Some("(webfetch)"));
     }
 
     // Reconstruct in original document order
@@ -2477,7 +2716,7 @@ fn process_websearch(hook_input: HookInput) -> Result<Option<String>> {
     let sid = crate::session::session_id();
     let web_blocks = panda_core::zoom::drain();
     if !web_blocks.is_empty() {
-        let _ = crate::zoom_store::save_blocks(&sid, web_blocks);
+        let _ = crate::zoom_store::save_blocks(&sid, web_blocks, Some("(websearch)"));
     }
 
     let in_tok = panda_core::tokens::count_tokens(&output_text);
@@ -2684,6 +2923,30 @@ fn process_compact_restore() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grep_line_path_extracts_file_prefix() {
+        assert_eq!(grep_line_path("src/main.rs:42: fn main() {"), Some("src/main.rs"));
+        assert_eq!(grep_line_path("lib/utils.py:def helper():"), Some("lib/utils.py"));
+        // No path-like prefix
+        assert_eq!(grep_line_path("just some text: with colon"), None);
+        assert_eq!(grep_line_path(""), None);
+        // Bare word without slash or dot is not a path
+        assert_eq!(grep_line_path("warning: something"), None);
+    }
+
+    #[test]
+    fn grep_line_content_strips_path_and_lineno() {
+        assert_eq!(grep_line_content("src/main.rs:42:fn main() {"), "fn main() {");
+        assert_eq!(grep_line_content("src/main.rs:fn main() {"), "fn main() {");
+        // Content colons survive
+        assert_eq!(
+            grep_line_content("a/b.go:7:x := map[string]int{}"),
+            "x := map[string]int{}"
+        );
+        // Lines without path prefix unchanged
+        assert_eq!(grep_line_content("plain text line"), "plain text line");
+    }
 
     #[test]
     fn read_dedup_threshold_scales_with_size() {

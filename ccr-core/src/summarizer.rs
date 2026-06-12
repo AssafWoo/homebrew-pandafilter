@@ -50,6 +50,30 @@ fn effective_critical_pattern() -> Regex {
     })
 }
 
+// ── Feedback-tuned keep threshold (FB) ────────────────────────────────────────
+//
+// The keep threshold (`max_score * factor`) decides how aggressively lines are
+// dropped. The calling layer can scale it per command based on observed zoom
+// expansion rates: commands whose collapsed blocks keep getting expanded are
+// over-compressed (scale < 1.0 → keep more); commands whose blocks are never
+// expanded can be compressed harder (scale > 1.0).
+
+thread_local! {
+    static KEEP_THRESHOLD_SCALE: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+}
+
+/// Set the keep-threshold scale for the current thread. Clamped to [0.70, 1.30]
+/// so a corrupted feedback store can never disable summarization or drop
+/// everything. Called once per hook invocation before the pipeline runs.
+pub fn set_keep_threshold_scale(scale: f32) {
+    let clamped = if scale.is_finite() { scale.clamp(0.70, 1.30) } else { 1.0 };
+    KEEP_THRESHOLD_SCALE.with(|s| s.set(clamped));
+}
+
+fn keep_threshold_scale() -> f32 {
+    KEEP_THRESHOLD_SCALE.with(|s| s.get())
+}
+
 // ── Configurable BERT model ──────────────────────────────────────────────────
 
 static MODEL_NAME: OnceCell<String> = OnceCell::new();
@@ -390,6 +414,95 @@ fn compute_centroid(embeddings: &[Vec<f32>]) -> Vec<f32> {
     centroid
 }
 
+// ── MMR budget fill ───────────────────────────────────────────────────────────
+
+/// Weight of relevance vs redundancy in the MMR objective.
+/// mmr(line) = λ·score − (1−λ)·max_similarity_to_already_selected
+const MMR_LAMBDA: f32 = 0.70;
+
+/// Cap on how many pre-selected (critical) lines seed the redundancy penalty.
+/// Bounds the O(n·|selected|) initialization on outputs with hundreds of
+/// error lines, where the marginal penalty signal of line 51+ is negligible.
+const MMR_MAX_SEED_LINES: usize = 50;
+
+/// Fill `selected` up to `budget` with lines scoring ≥ `score_threshold`,
+/// using greedy Maximal Marginal Relevance instead of a plain top-k cut.
+///
+/// Plain top-k keeps fifteen near-identical type errors because they all clear
+/// the threshold; MMR keeps one representative and spends the rest of the
+/// budget on lines that add new information. `scored[p]` and `embeddings[p]`
+/// describe the same line (parallel arrays, one entry per non-empty line).
+///
+/// The max-similarity per candidate is maintained incrementally — O(n) dot
+/// products per selection round instead of O(n·|selected|).
+fn mmr_fill(
+    scored: &[(usize, f32)],
+    embeddings: &[Vec<f32>],
+    selected: &mut std::collections::HashSet<usize>,
+    budget: usize,
+    score_threshold: f32,
+) {
+    if scored.len() != embeddings.len() {
+        // Length mismatch means the parallel-array invariant is broken;
+        // fall back to the caller's pre-selection rather than guessing.
+        return;
+    }
+
+    // Candidates: above threshold and not already selected (critical lines).
+    let mut remaining: Vec<usize> = (0..scored.len())
+        .filter(|&p| scored[p].1 >= score_threshold && !selected.contains(&scored[p].0))
+        .collect();
+    if remaining.is_empty() {
+        return;
+    }
+
+    // Seed each candidate's redundancy penalty with its similarity to the
+    // pre-selected (critical) lines, capped at MMR_MAX_SEED_LINES seeds.
+    let orig_to_pos: std::collections::HashMap<usize, usize> = scored
+        .iter()
+        .enumerate()
+        .map(|(p, (orig, _))| (*orig, p))
+        .collect();
+    let seed_positions: Vec<usize> = selected
+        .iter()
+        .filter_map(|orig| orig_to_pos.get(orig).copied())
+        .take(MMR_MAX_SEED_LINES)
+        .collect();
+
+    let mut max_sim: Vec<f32> = vec![0.0; scored.len()];
+    for &p in &remaining {
+        for &sp in &seed_positions {
+            let sim = cosine_similarity(&embeddings[p], &embeddings[sp]);
+            if sim > max_sim[p] {
+                max_sim[p] = sim;
+            }
+        }
+    }
+
+    while selected.len() < budget && !remaining.is_empty() {
+        // Pick the candidate with the best MMR objective.
+        let (best_slot, _) = remaining
+            .iter()
+            .enumerate()
+            .map(|(slot, &p)| {
+                (slot, MMR_LAMBDA * scored[p].1 - (1.0 - MMR_LAMBDA) * max_sim[p])
+            })
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap();
+
+        let picked = remaining.swap_remove(best_slot);
+        selected.insert(scored[picked].0);
+
+        // Update every remaining candidate's penalty against the new pick.
+        for &p in &remaining {
+            let sim = cosine_similarity(&embeddings[p], &embeddings[picked]);
+            if sim > max_sim[p] {
+                max_sim[p] = sim;
+            }
+        }
+    }
+}
+
 pub fn embed_direct(texts: Vec<&str>) -> anyhow::Result<Vec<Vec<f32>>> {
     #[cfg(unix)]
     if !in_daemon() {
@@ -557,16 +670,9 @@ fn summarize_semantic_intent(
     }
 
     let max_score = scored.iter().map(|(_, s)| *s).fold(0.0f32, f32::max);
-    let score_threshold = max_score * 0.30;
+    let score_threshold = max_score * 0.30 * keep_threshold_scale();
 
-    let mut ranked = scored.clone();
-    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    for (orig_idx, score) in &ranked {
-        if selected.len() >= budget { break; }
-        if *score < score_threshold { break; }
-        selected.insert(*orig_idx);
-    }
+    mmr_fill(&scored, embeddings, &mut selected, budget, score_threshold);
 
     let mut kept: Vec<usize> = selected.into_iter().collect();
     kept.sort();
@@ -674,24 +780,13 @@ fn summarize_semantic(
         }
     }
 
-    // Fill budget from highest-scoring lines above threshold
+    // Fill budget from highest-scoring lines above threshold, redundancy-aware
     let max_score = scored.iter().map(|(_, s)| *s).fold(0.0f32, f32::max);
     // Slightly lower threshold in query-biased mode since relevance can shift scores
     let threshold_factor = if has_query { 0.30 } else { 0.40 };
-    let score_threshold = max_score * threshold_factor;
+    let score_threshold = max_score * threshold_factor * keep_threshold_scale();
 
-    let mut ranked = scored.clone();
-    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    for (orig_idx, score) in &ranked {
-        if selected.len() >= budget {
-            break;
-        }
-        if *score < score_threshold {
-            break;
-        }
-        selected.insert(*orig_idx);
-    }
+    mmr_fill(&scored, embeddings, &mut selected, budget, score_threshold);
 
     // Restore order, insert omission markers between gaps
     let mut kept: Vec<usize> = selected.into_iter().collect();
@@ -829,7 +924,7 @@ fn summarize_semantic_anchored(
     }
 
     let max_score = scored.iter().map(|(_, s)| *s).fold(0.0f32, f32::max);
-    let score_threshold = max_score * 0.40;
+    let score_threshold = max_score * 0.40 * keep_threshold_scale();
 
     let mut ranked = scored.clone();
     ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -1389,21 +1484,14 @@ fn summarize_against_centroid_inner(
     }
 
     let max_score = scored.iter().map(|(_, s)| *s).fold(0.0f32, f32::max);
-    let relative_threshold = max_score * 0.40;
+    let relative_threshold = max_score * 0.40 * keep_threshold_scale();
     // Absolute floor: lines with anomaly below 0.10 are considered "normal for this command"
     // and suppressed regardless of budget. This handles the case where ALL lines are
     // near-identical to the historical centroid (max_score ≈ 0 → relative threshold ≈ 0).
     let absolute_floor: f32 = 0.10;
     let score_threshold = relative_threshold.max(absolute_floor);
 
-    let mut ranked = scored.clone();
-    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    for (orig_idx, score) in &ranked {
-        if selected.len() >= budget { break; }
-        if *score < score_threshold { break; }
-        selected.insert(*orig_idx);
-    }
+    mmr_fill(&scored, &embeddings, &mut selected, budget, score_threshold);
 
     let mut kept: Vec<usize> = selected.into_iter().collect();
     kept.sort();
@@ -1816,6 +1904,95 @@ mod tests {
     fn model_registry_unknown_falls_back_to_l6() {
         let reg = model_registry("NonexistentModel");
         assert_eq!(reg.repo, "Qdrant/all-MiniLM-L6-v2-onnx");
+    }
+
+    // ── MMR fill unit tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn mmr_prefers_diverse_over_redundant() {
+        // Three candidates: two identical high-scorers and one distinct mid-scorer.
+        // Plain top-2 would take both identical lines; MMR takes one of each.
+        let scored = vec![(0usize, 0.9f32), (1, 0.9), (2, 0.6)];
+        let embeddings = vec![
+            vec![1.0f32, 0.0],
+            vec![1.0f32, 0.0],
+            vec![0.0f32, 1.0],
+        ];
+        let mut selected = std::collections::HashSet::new();
+        mmr_fill(&scored, &embeddings, &mut selected, 2, 0.1);
+        assert_eq!(selected.len(), 2);
+        assert!(selected.contains(&2), "distinct line should be selected over duplicate");
+        assert!(selected.contains(&0) || selected.contains(&1));
+        assert!(!(selected.contains(&0) && selected.contains(&1)));
+    }
+
+    #[test]
+    fn mmr_respects_threshold() {
+        let scored = vec![(0usize, 0.9f32), (1, 0.05)];
+        let embeddings = vec![vec![1.0f32, 0.0], vec![0.0f32, 1.0]];
+        let mut selected = std::collections::HashSet::new();
+        mmr_fill(&scored, &embeddings, &mut selected, 10, 0.5);
+        assert!(selected.contains(&0));
+        assert!(!selected.contains(&1), "below-threshold line must not be selected");
+    }
+
+    #[test]
+    fn mmr_respects_budget_with_preselected() {
+        let scored: Vec<(usize, f32)> = (0..10).map(|i| (i, 0.9)).collect();
+        let embeddings: Vec<Vec<f32>> = (0..10)
+            .map(|i| {
+                let mut v = vec![0.0f32; 10];
+                v[i] = 1.0;
+                v
+            })
+            .collect();
+        let mut selected: std::collections::HashSet<usize> = [0usize, 1].into_iter().collect();
+        mmr_fill(&scored, &embeddings, &mut selected, 4, 0.1);
+        assert_eq!(selected.len(), 4);
+    }
+
+    #[test]
+    fn mmr_penalizes_similarity_to_preselected_critical_lines() {
+        // Candidate 1 duplicates the pre-selected critical line 0;
+        // candidate 2 is distinct with the same raw score. With budget for
+        // only one more line, MMR must pick the distinct one.
+        let scored = vec![(0usize, 0.2f32), (1, 0.8), (2, 0.8)];
+        let embeddings = vec![
+            vec![1.0f32, 0.0],
+            vec![1.0f32, 0.0],
+            vec![0.0f32, 1.0],
+        ];
+        let mut selected: std::collections::HashSet<usize> = [0usize].into_iter().collect();
+        mmr_fill(&scored, &embeddings, &mut selected, 2, 0.1);
+        assert!(selected.contains(&2), "line redundant with critical pre-selection should lose");
+        assert!(!selected.contains(&1));
+    }
+
+    #[test]
+    fn mmr_length_mismatch_is_noop() {
+        let scored = vec![(0usize, 0.9f32)];
+        let embeddings: Vec<Vec<f32>> = vec![];
+        let mut selected = std::collections::HashSet::new();
+        mmr_fill(&scored, &embeddings, &mut selected, 5, 0.1);
+        assert!(selected.is_empty());
+    }
+
+    // ── Keep-threshold scale tests ───────────────────────────────────────────
+
+    #[test]
+    fn keep_threshold_scale_default_is_one() {
+        assert!((keep_threshold_scale() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn keep_threshold_scale_clamps() {
+        set_keep_threshold_scale(5.0);
+        assert!((keep_threshold_scale() - 1.30).abs() < 1e-6);
+        set_keep_threshold_scale(0.1);
+        assert!((keep_threshold_scale() - 0.70).abs() < 1e-6);
+        set_keep_threshold_scale(f32::NAN);
+        assert!((keep_threshold_scale() - 1.0).abs() < 1e-6);
+        set_keep_threshold_scale(1.0);
     }
 
     #[test]

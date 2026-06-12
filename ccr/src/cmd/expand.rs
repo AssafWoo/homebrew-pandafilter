@@ -18,6 +18,13 @@ pub fn run(id: &str, list: bool) -> Result<()> {
     }
 
     let content = crate::zoom_store::load_block(id)?;
+
+    // Feedback signal: expanding a block means its content was needed —
+    // the command that collapsed it was over-compressed.
+    if let Some(cmd) = crate::zoom_store::block_command(id) {
+        crate::feedback::record_expand(&cmd);
+    }
+
     print!("{}", content);
     if !content.ends_with('\n') {
         println!();

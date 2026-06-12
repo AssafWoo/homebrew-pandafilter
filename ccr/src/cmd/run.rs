@@ -128,7 +128,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
             Ok(r) => {
                 // Persist zoom blocks from pipeline fallback.
                 let sid_z = crate::session::session_id();
-                let _ = crate::zoom_store::save_blocks(&sid_z, r.zoom_blocks);
+                let _ = crate::zoom_store::save_blocks(&sid_z, r.zoom_blocks, Some(&cmd_name));
                 r.output
             }
             Err(_) => pipeline_input.clone(),

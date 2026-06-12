@@ -303,6 +303,25 @@ impl SessionState {
         }
     }
 
+    /// Semantic search over session entries (session vector store, Phase 1).
+    ///
+    /// Returns up to `top_k` entries ranked by cosine similarity to
+    /// `query_embed` (entries' embeddings are L2-normalized at record time, so
+    /// similarity is a plain dot product). Entries recorded on the fast path
+    /// carry zero embeddings and never match.
+    pub fn query_semantic(&self, query_embed: &[f32], top_k: usize) -> Vec<(f32, &SessionEntry)> {
+        let mut scored: Vec<(f32, &SessionEntry)> = self
+            .entries
+            .iter()
+            .filter(|e| !e.embedding.is_empty())
+            .map(|e| (cosine_sim(query_embed, &e.embedding), e))
+            .filter(|(score, _)| *score > 0.0)
+            .collect();
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(top_k);
+        scored
+    }
+
     /// Returns the centroid_delta from the most recent entry for `cmd` that has one.
     /// Used by adaptive pressure to detect stable (repetitive) command output.
     pub fn last_centroid_delta(&self, cmd: &str) -> Option<f32> {
@@ -841,5 +860,34 @@ mod tests {
         let emb_b = vec![0.0, 1.0, 0.0]; // cosine sim = 0.0
         let session = make_session_with_entry("curl", emb_a);
         assert!(session.find_similar_recent("curl", &emb_b).is_none());
+    }
+
+    #[test]
+    fn query_semantic_ranks_by_similarity() {
+        let mut s = SessionState::default();
+        s.record("cargo build", vec![1.0, 0.0, 0.0], 100, "build output", false, None);
+        s.record("git status", vec![0.0, 1.0, 0.0], 50, "status output", false, None);
+        s.record("npm test", vec![0.9, 0.1, 0.0], 80, "test output", false, None);
+
+        let results = s.query_semantic(&[1.0, 0.0, 0.0], 2);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].1.cmd, "cargo build");
+        assert_eq!(results[1].1.cmd, "npm test");
+        assert!(results[0].0 > results[1].0);
+    }
+
+    #[test]
+    fn query_semantic_skips_zero_embeddings() {
+        let mut s = SessionState::default();
+        // Fast-path entries store zero embeddings — must never match.
+        s.record("fast cmd", vec![0.0, 0.0, 0.0], 10, "fast", false, None);
+        let results = s.query_semantic(&[1.0, 0.0, 0.0], 5);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn query_semantic_empty_session_returns_empty() {
+        let s = SessionState::default();
+        assert!(s.query_semantic(&[1.0, 0.0], 5).is_empty());
     }
 }
