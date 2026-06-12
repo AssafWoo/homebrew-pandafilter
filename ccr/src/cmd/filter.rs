@@ -17,6 +17,9 @@ fn try_handler(input: &str, hint: &str) -> Option<String> {
 }
 
 pub fn run(command_hint: Option<String>, json_output: bool) -> Result<()> {
+    // Overlap one-time tokenizer init with stdin reading / filtering.
+    std::thread::spawn(panda_core::tokens::warm);
+
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
 

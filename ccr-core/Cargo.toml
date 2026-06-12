@@ -10,7 +10,7 @@ serde_json.workspace = true
 toml.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
-tiktoken-rs.workspace = true
+bpe-openai.workspace = true
 once_cell = "1"
 libc = "0.2"
 ort = { version = "=2.0.0-rc.12", features = ["std", "ndarray", "download-binaries", "tls-native"], default-features = false }
@@ -22,3 +22,6 @@ walkdir = "2"
 
 [dev-dependencies]
 tempfile = "3"
+# Kept as a dev-dependency only: parity tests verify bpe-openai produces
+# identical cl100k token counts to the previous tiktoken-rs implementation.
+tiktoken-rs.workspace = true

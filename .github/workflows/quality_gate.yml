@@ -79,16 +79,17 @@ jobs:
         run: npm install --prefer-offline
         working-directory: ccr-eval/benchmarks/repos/express
 
-      # Debug build is intentional: compression logic is identical to release,
-      # and the latency gate is soft-only (warn, never fail), so the slower
-      # debug binary does not cause false failures.
+      # Release build is required for meaningful latency tracking:
+      # baseline.json latencies were recorded with a release binary, and a
+      # debug build carries ~5x fixed per-invocation overhead that drowns
+      # real latency changes in false soft warnings.
       - name: Build panda
-        run: cargo build -p panda
+        run: cargo build -p panda --release
 
       - name: Run quality gate
         run: |
           python3 ccr-eval/benchmarks/quality_gate.py \
-            --panda target/debug/panda \
+            --panda target/release/panda \
             --baseline ccr-eval/benchmarks/baseline.json \
             --ci \
             --report-dir /tmp/qg-report

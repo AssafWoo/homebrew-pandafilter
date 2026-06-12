@@ -62,6 +62,9 @@ pub fn run_lifecycle(subcommand: &str) -> Result<()> {
 }
 
 pub fn run() -> Result<()> {
+    // Overlap one-time tokenizer init with stdin reading / filtering.
+    std::thread::spawn(panda_core::tokens::warm);
+
     // Integrity check: warn and exit if hook script has been tampered with.
     // PANDA_AGENT env var is set by Cursor's PostToolUse hook command; default = claude.
     let agent = std::env::var("PANDA_AGENT").unwrap_or_else(|_| "claude".to_string());
