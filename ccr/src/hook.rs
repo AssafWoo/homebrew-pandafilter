@@ -259,9 +259,8 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
     let sid = crate::session::session_id();
     let mut session = crate::session::SessionState::load(&sid);
 
-    // RC: result cache — return byte-identical output on hit (prompt cache stability).
-    // Loaded once here; kept in `rc_cache` so the insert at the end avoids a second
-    // disk read. Saved asynchronously after the output is returned.
+    // RC tier 1: per-session raw cache — byte-identical output on hit (prompt cache stability).
+    // Loaded once here; kept in `rc_cache` so the insert at the end avoids a second disk read.
     let rc_key = crate::result_cache::ResultCache::compute_key(&output_text, command_hint.as_deref());
     let mut rc_cache: Option<crate::result_cache::ResultCache> = None;
     if !clean_room {
@@ -280,6 +279,33 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
             return Ok(Some(serde_json::to_string(&hook_output)?));
         }
         rc_cache = Some(rc);
+    }
+
+    // RC tier 2: cross-session global raw cache (24 h TTL) — compute reuse across sessions.
+    // Checked only on per-session miss. Skips the full pipeline; output is byte-identical.
+    let mut global_rc_cache: Option<crate::result_cache::ResultCache> = None;
+    if !clean_room {
+        let mut grc = crate::result_cache::ResultCache::load_global();
+        grc.evict_global_old();
+        if let Some(entry) = grc.lookup(&rc_key) {
+            let cached_output = entry.output.clone();
+            let analytics = panda_core::analytics::Analytics::new_cache_hit(
+                entry.input_tokens,
+                entry.output_tokens,
+                command_hint.clone(),
+                None,
+            );
+            crate::util::append_analytics(&analytics);
+            // Also populate the per-session cache so future same-session hits skip this step.
+            if let Some(ref mut rc) = rc_cache {
+                rc.insert(rc_key.clone(), cached_output.clone(), entry.input_tokens, entry.output_tokens);
+                let sid_bg = sid.clone();
+                let rc_bg = rc_cache.take().unwrap();
+                std::thread::spawn(move || { rc_bg.save(&sid_bg); });
+            }
+            return Ok(Some(serde_json::to_string(&HookOutput { output: cached_output })?));
+        }
+        global_rc_cache = Some(grc);
     }
 
     // cmd_key for session tracking: skip leading KEY=VALUE env vars and wrapper prefix.
@@ -302,15 +328,46 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         real_iter.take(2).collect::<Vec<_>>().join(" ")
     };
 
-    // Fix 1+2: Polling suppressor with timestamp-normalized embeddings.
-    // If the same command ran within the last 120 seconds, embed a
-    // timestamp-stripped version of the output and check similarity at a
-    // lower threshold (0.80 vs 0.92).  Catches polling loops where only
-    // clocks/counters/UUIDs differ between otherwise identical responses.
+    // RC tier 3: normalized-hash redirect — O(1), fires before BERT.
+    // Strips temporal noise (timestamps, UUIDs, durations, git SHAs) then hashes.
+    // On hit emits a short "output unchanged" marker (~15 tokens) instead of the
+    // full compressed output, saving tokens for re-runs that differ only in noise.
+    // Complements the BERT polling suppressor (which catches near-duplicates at 0.80
+    // cosine threshold); this catches exact-after-normalization matches for free.
+    let normalized_text = strip_temporal_noise(&output_text);
+    let norm_key = crate::result_cache::ResultCache::compute_normalized_key(
+        &normalized_text,
+        command_hint.as_deref(),
+    );
+    if !clean_room {
+        if let Some(ref rc) = rc_cache {
+            if let Some(norm_entry) = rc.lookup_normalized(&norm_key) {
+                let in_tok = panda_core::tokens::count_tokens(&output_text);
+                let tokens_saved = norm_entry.output_tokens.saturating_sub(1);
+                let marker = format!(
+                    "[output unchanged since turn {} — ~{} tokens saved]",
+                    norm_entry.turn_num, tokens_saved
+                );
+                crate::util::append_analytics(&panda_core::analytics::Analytics::new(
+                    in_tok,
+                    panda_core::tokens::count_tokens(&marker),
+                    command_hint.clone(),
+                    None,
+                    None,
+                ));
+                return Ok(Some(serde_json::to_string(&HookOutput { output: marker })?));
+            }
+        }
+    }
+
+    // Fix 1+2: Polling suppressor with BERT embeddings.
+    // If the same command ran within the last 120 seconds, embed the
+    // timestamp-stripped version and check similarity at 0.80.
+    // Catches near-duplicates (shifted line numbers, changed counts) that the
+    // normalized hash above misses. Normalized text already computed above.
     // Skipped in clean-room mode — session history is not consulted.
     if !clean_room && session.has_recent_entry(&cmd_key, 120) && crate::bert_budget::try_consume() {
-        let normalized = strip_temporal_noise(&output_text);
-        if let Ok(mut embs) = panda_core::summarizer::embed_batch(&[normalized.as_str()]) {
+        if let Ok(mut embs) = panda_core::summarizer::embed_batch(&[normalized_text.as_str()]) {
             if let Some(emb) = embs.pop() {
                 if let Some(hit) = session.find_similar_recent(&cmd_key, &emb) {
                     let age = crate::session::format_age(hit.age_secs);
@@ -672,12 +729,20 @@ fn process_bash(hook_input: HookInput) -> Result<Option<String>> {
         final_output = format!("{}\n{}", warning_block, final_output);
     }
 
-    // Result cache insert — uses the already-loaded cache from the top of this
-    // function (no second disk read). Saved asynchronously after output is returned.
+    // Result cache inserts — per-session raw + normalized redirect + global raw.
+    // All saved asynchronously after output is returned (no blocking disk I/O on
+    // the hot path). The per-session save carries norm_entries; the global save
+    // strips them (turn numbers are meaningless across sessions).
+    let turn_num = session.entries.len() + 1;
     if let Some(mut rc) = rc_cache {
-        rc.insert(rc_key, final_output.clone(), input_tokens, output_tokens);
+        rc.insert(rc_key.clone(), final_output.clone(), input_tokens, output_tokens);
+        rc.insert_normalized(norm_key, turn_num, output_tokens);
         let sid_bg = sid.clone();
         std::thread::spawn(move || { rc.save(&sid_bg); });
+    }
+    if let Some(mut grc) = global_rc_cache {
+        grc.insert(rc_key, final_output.clone(), input_tokens, output_tokens);
+        std::thread::spawn(move || { grc.save_global(); });
     }
 
     let hook_output = HookOutput { output: final_output };

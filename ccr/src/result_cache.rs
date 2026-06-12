@@ -1,19 +1,27 @@
 //! RC — Post-Pipeline Result Cache.
 //!
-//! Caches compressed bash outputs keyed by a hash of the raw text and command hint.
-//! On a hit, the entire pipeline is bypassed and stored bytes are returned
-//! byte-identically, guaranteeing stable content in Claude's conversation history
-//! which maximises Anthropic prompt cache hits.
+//! Two complementary tiers:
 //!
-//! Cache entries expire after 1 hour. Storage is per-session.
+//! 1. **Raw cache** (per-session + global cross-session, 24 h):
+//!    Keyed by hash(raw_text + hint). On hit, returns byte-identical compressed
+//!    output — guarantees Anthropic prompt-cache stability AND skips the full
+//!    pipeline on repeated inputs across sessions.
+//!
+//! 2. **Normalized redirect cache** (per-session, 1 h):
+//!    Keyed by hash(strip_temporal_noise(text) + hint). On hit, emits a
+//!    ~15-token "output unchanged" marker instead of the full compressed output,
+//!    saving tokens when the same command re-runs with only clock/UUID noise
+//!    differing. Checked before the BERT polling suppressor; fires O(1).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// TTL for cache entries in seconds.
+/// TTL for per-session raw entries and normalized-redirect entries (1 h).
 const CACHE_TTL_SECS: u64 = 3_600;
-/// Maximum number of entries per session cache file.
+/// TTL for cross-session global raw entries (24 h).
+const GLOBAL_TTL_SECS: u64 = 86_400;
+/// Maximum entries per cache file.
 const MAX_ENTRIES: usize = 200;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -25,9 +33,20 @@ pub struct ResultCacheEntry {
     pub output_tokens: usize,
 }
 
+/// Tracks a previous compressed result for redirect-on-repeat purposes.
+/// Stored per-session; turn_num lets us emit "same as turn N" markers.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct NormCacheEntry {
+    pub turn_num: usize,
+    pub output_tokens: usize,
+    pub ts: u64,
+}
+
 #[derive(Serialize, Deserialize, Default)]
 pub struct ResultCache {
     entries: HashMap<String, ResultCacheEntry>,
+    #[serde(default)]
+    norm_entries: HashMap<String, NormCacheEntry>,
 }
 
 // ── Persistence ────────────────────────────────────────────────────────────────
@@ -41,6 +60,26 @@ fn storage_path(session_id: &str) -> Option<PathBuf> {
     )
 }
 
+fn global_storage_path() -> Option<PathBuf> {
+    Some(
+        dirs::data_local_dir()?
+            .join("panda")
+            .join("result_cache")
+            .join("global.json"),
+    )
+}
+
+fn save_to(cache: &ResultCache, path: &PathBuf) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let Ok(json) = serde_json::to_string(cache) else { return };
+    let tmp = path.with_extension("tmp");
+    if std::fs::write(&tmp, json).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
 impl ResultCache {
     pub fn load(session_id: &str) -> Self {
         storage_path(session_id)
@@ -51,14 +90,28 @@ impl ResultCache {
 
     pub fn save(&self, session_id: &str) {
         let Some(path) = storage_path(session_id) else { return };
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let Ok(json) = serde_json::to_string(self) else { return };
-        let tmp = path.with_extension("tmp");
-        if std::fs::write(&tmp, json).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
-        }
+        save_to(self, &path);
+    }
+
+    /// Load the cross-session global raw cache. `norm_entries` are left empty —
+    /// redirect turn numbers are session-scoped and meaningless across sessions.
+    pub fn load_global() -> Self {
+        global_storage_path()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|s| serde_json::from_str::<ResultCache>(&s).ok())
+            .map(|mut c| { c.norm_entries.clear(); c })
+            .unwrap_or_default()
+    }
+
+    /// Persist only the raw `entries` to the global file (norm entries are
+    /// session-scoped and must not leak cross-session).
+    pub fn save_global(&self) {
+        let Some(path) = global_storage_path() else { return };
+        let slim = ResultCache {
+            entries: self.entries.clone(),
+            norm_entries: HashMap::new(),
+        };
+        save_to(&slim, &path);
     }
 }
 
@@ -71,14 +124,31 @@ impl ResultCache {
     pub fn compute_key(raw_text: &str, command_hint: Option<&str>) -> String {
         crate::util::hash_str(&format!("{}\0{}", raw_text, command_hint.unwrap_or("")))
     }
+
+    /// Compute a redirect key from temporally-normalized text.
+    /// `normalized_text` should be the output of `strip_temporal_noise` (defined
+    /// in hook.rs) — timestamps, UUIDs, durations, git SHAs stripped.
+    /// The "norm\0" prefix ensures no collision with raw keys.
+    pub fn compute_normalized_key(normalized_text: &str, command_hint: Option<&str>) -> String {
+        crate::util::hash_str(&format!(
+            "norm\0{}\0{}",
+            normalized_text,
+            command_hint.unwrap_or("")
+        ))
+    }
 }
 
 // ── Lookup / insert / evict ───────────────────────────────────────────────────
 
 impl ResultCache {
-    /// Return a cached entry for `key`, or `None` on a miss.
+    /// Return a cached raw entry for `key`, or `None` on a miss.
     pub fn lookup(&self, key: &str) -> Option<&ResultCacheEntry> {
         self.entries.get(key)
+    }
+
+    /// Return a normalized redirect entry, or `None` on a miss.
+    pub fn lookup_normalized(&self, key: &str) -> Option<&NormCacheEntry> {
+        self.norm_entries.get(key)
     }
 
     /// Store a compressed result. Evicts the oldest entry when at capacity.
@@ -90,7 +160,6 @@ impl ResultCache {
         output_tokens: usize,
     ) {
         if self.entries.len() >= MAX_ENTRIES {
-            // Evict the oldest entry by timestamp
             if let Some(oldest_key) = self
                 .entries
                 .iter()
@@ -111,9 +180,40 @@ impl ResultCache {
         );
     }
 
-    /// Remove entries older than the TTL.
+    /// Record that normalized key `key` was seen at turn `turn_num` and
+    /// produced `output_tokens` tokens. Evicts oldest when at capacity.
+    pub fn insert_normalized(&mut self, key: String, turn_num: usize, output_tokens: usize) {
+        if self.norm_entries.len() >= MAX_ENTRIES {
+            if let Some(oldest_key) = self
+                .norm_entries
+                .iter()
+                .min_by_key(|(_, v)| v.ts)
+                .map(|(k, _)| k.clone())
+            {
+                self.norm_entries.remove(&oldest_key);
+            }
+        }
+        self.norm_entries.insert(
+            key,
+            NormCacheEntry {
+                turn_num,
+                output_tokens,
+                ts: now_secs(),
+            },
+        );
+    }
+
+    /// Remove entries older than their respective TTLs.
     pub fn evict_old(&mut self) {
-        let cutoff = now_secs().saturating_sub(CACHE_TTL_SECS);
+        let raw_cutoff = now_secs().saturating_sub(CACHE_TTL_SECS);
+        self.entries.retain(|_, v| v.ts >= raw_cutoff);
+        let norm_cutoff = now_secs().saturating_sub(CACHE_TTL_SECS);
+        self.norm_entries.retain(|_, v| v.ts >= norm_cutoff);
+    }
+
+    /// Remove global raw entries older than the 24 h TTL.
+    pub fn evict_global_old(&mut self) {
+        let cutoff = now_secs().saturating_sub(GLOBAL_TTL_SECS);
         self.entries.retain(|_, v| v.ts >= cutoff);
     }
 }
@@ -206,5 +306,57 @@ mod tests {
             cache.insert(key, format!("output {}", i), 10, 5);
         }
         assert!(cache.entries.len() <= MAX_ENTRIES);
+    }
+
+    #[test]
+    fn normalized_key_differs_from_raw_key() {
+        let raw = ResultCache::compute_key("same text", Some("cargo test"));
+        let norm = ResultCache::compute_normalized_key("same text", Some("cargo test"));
+        assert_ne!(raw, norm, "norm key must not collide with raw key");
+    }
+
+    #[test]
+    fn normalized_key_is_deterministic() {
+        let k1 = ResultCache::compute_normalized_key("output with 2024-01-01 timestamp", Some("git"));
+        let k2 = ResultCache::compute_normalized_key("output with 2024-01-01 timestamp", Some("git"));
+        assert_eq!(k1, k2);
+    }
+
+    #[test]
+    fn norm_lookup_miss_then_hit() {
+        let mut cache = ResultCache::default();
+        let key = ResultCache::compute_normalized_key("test output", Some("cargo test"));
+        assert!(cache.lookup_normalized(&key).is_none());
+        cache.insert_normalized(key.clone(), 3, 120);
+        let entry = cache.lookup_normalized(&key).unwrap();
+        assert_eq!(entry.turn_num, 3);
+        assert_eq!(entry.output_tokens, 120);
+    }
+
+    #[test]
+    fn norm_entries_excluded_from_global_save() {
+        let mut cache = ResultCache::default();
+        cache.insert_normalized("norm_key".to_string(), 1, 50);
+        let global = ResultCache {
+            entries: cache.entries.clone(),
+            norm_entries: std::collections::HashMap::new(),
+        };
+        assert!(global.lookup_normalized("norm_key").is_none());
+    }
+
+    #[test]
+    fn norm_entries_evicted_by_evict_old() {
+        let mut cache = ResultCache::default();
+        let key = "old_norm".to_string();
+        cache.norm_entries.insert(
+            key.clone(),
+            NormCacheEntry {
+                turn_num: 1,
+                output_tokens: 10,
+                ts: now_secs().saturating_sub(CACHE_TTL_SECS + 1),
+            },
+        );
+        cache.evict_old();
+        assert!(cache.lookup_normalized(&key).is_none());
     }
 }
