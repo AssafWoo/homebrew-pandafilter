@@ -36,6 +36,14 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Clone benchmark repos
+        run: |
+          mkdir -p ccr-eval/benchmarks/repos
+          git clone --depth=50 https://github.com/expressjs/express.git  ccr-eval/benchmarks/repos/express
+          git clone --depth=50 https://github.com/pallets/flask.git      ccr-eval/benchmarks/repos/flask
+          git clone --depth=50 https://github.com/tiangolo/fastapi.git   ccr-eval/benchmarks/repos/fastapi
+          git clone --depth=50 https://github.com/gin-gonic/gin.git      ccr-eval/benchmarks/repos/gin
+
       - name: Install express dependencies
         run: npm install --prefer-offline
         working-directory: ccr-eval/benchmarks/repos/express
