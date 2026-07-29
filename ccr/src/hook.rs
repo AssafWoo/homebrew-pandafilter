@@ -1,7 +1,7 @@
 use anyhow::Result;
+use dirs;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
-use dirs;
 
 #[derive(Debug, Deserialize)]
 struct HookInput {
@@ -13,17 +13,47 @@ struct HookInput {
     tool_response: ToolResponse,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Default)]
 struct ToolResponse {
-    #[serde(default)]
     output: String,
-    #[serde(default)]
     stdout: String,
-    #[serde(default)]
     error: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+impl<'de> Deserialize<'de> for ToolResponse {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let response = match value {
+            serde_json::Value::String(output) => Self {
+                output,
+                ..Self::default()
+            },
+            serde_json::Value::Object(fields) => Self {
+                output: fields
+                    .get("output")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                stdout: fields
+                    .get("stdout")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                error: fields
+                    .get("error")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string),
+            },
+            _ => Self::default(),
+        };
+        Ok(response)
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 struct HookOutput {
     output: String,
 }
@@ -96,9 +126,24 @@ pub fn run() -> Result<()> {
     }
 
     if let Ok(Some(output)) = process(&raw) {
-        print!("{}", output);
+        if let Some(output) = format_hook_output_for_agent(&agent, &output) {
+            print!("{}", output);
+        }
     }
     Ok(())
+}
+
+fn format_hook_output_for_agent(agent: &str, output: &str) -> Option<String> {
+    if agent != "codex" {
+        return Some(output.to_string());
+    }
+
+    let hook_output: HookOutput = serde_json::from_str(output).ok()?;
+    serde_json::to_string(&serde_json::json!({
+        "continue": false,
+        "stopReason": hook_output.output,
+    }))
+    .ok()
 }
 
 // ── Bash tool handler ─────────────────────────────────────────────────────────
@@ -2991,6 +3036,85 @@ fn process_compact_restore() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_response_accepts_codex_string_output() {
+        let input: HookInput = serde_json::from_value(serde_json::json!({
+            "tool_name": "Bash",
+            "tool_input": {"command": "printf test"},
+            "tool_response": "command output"
+        }))
+        .unwrap();
+
+        assert_eq!(input.tool_response.output, "command output");
+        assert!(input.tool_response.stdout.is_empty());
+        assert!(input.tool_response.error.is_none());
+    }
+
+    #[test]
+    fn tool_response_prefers_supported_object_fields() {
+        let input: HookInput = serde_json::from_value(serde_json::json!({
+            "tool_response": {
+                "output": "normal output",
+                "stdout": "fallback output",
+                "error": "error output"
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(input.tool_response.output, "normal output");
+        assert_eq!(input.tool_response.stdout, "fallback output");
+        assert_eq!(input.tool_response.error.as_deref(), Some("error output"));
+    }
+
+    #[test]
+    fn tool_response_ignores_unknown_json_shapes() {
+        let input: HookInput = serde_json::from_value(serde_json::json!({
+            "tool_response": ["unexpected", "array"]
+        }))
+        .unwrap();
+
+        assert!(input.tool_response.output.is_empty());
+        assert!(input.tool_response.stdout.is_empty());
+        assert!(input.tool_response.error.is_none());
+    }
+
+    #[test]
+    fn codex_post_tool_output_replaces_model_visible_result() {
+        let internal = serde_json::to_string(&HookOutput {
+            output: "compressed \"output\"\nwith another line".to_string(),
+        })
+        .unwrap();
+
+        let formatted = format_hook_output_for_agent("codex", &internal).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&formatted).unwrap();
+
+        assert_eq!(value["continue"], false);
+        assert_eq!(
+            value["stopReason"],
+            "compressed \"output\"\nwith another line"
+        );
+        assert!(value.get("output").is_none());
+    }
+
+    #[test]
+    fn non_codex_post_tool_output_remains_unchanged() {
+        let internal = r#"{"output":"compressed output"}"#;
+
+        assert_eq!(
+            format_hook_output_for_agent("claude", internal).as_deref(),
+            Some(internal)
+        );
+        assert_eq!(
+            format_hook_output_for_agent("cursor", internal).as_deref(),
+            Some(internal)
+        );
+    }
+
+    #[test]
+    fn malformed_codex_post_tool_output_fails_open() {
+        assert!(format_hook_output_for_agent("codex", "not json").is_none());
+    }
 
     #[test]
     fn grep_line_path_extracts_file_prefix() {
