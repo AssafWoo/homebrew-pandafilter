@@ -5,7 +5,7 @@
 //! Hook registration format (PreToolUse — command rewriting):
 //!   ```json
 //!   { "hooks": { "PreToolUse": [
-//!     { "matcher": "shell",
+//!     { "matcher": "^Bash$",
 //!       "hooks": [{ "type": "command", "command": "<script_path>" }] }
 //!   ]}}
 //!   ```
@@ -13,14 +13,14 @@
 //! Hook registration format (PostToolUse — output compression):
 //!   ```json
 //!   { "hooks": { "PostToolUse": [
-//!     { "matcher": "shell",
+//!     { "matcher": "^Bash$",
 //!       "hooks": [{ "type": "command", "command": "<panda hook cmd>" }] }
 //!   ]}}
 //!   ```
 //!
 //! Hook input (PreToolUse):  stdin JSON with `tool_name`, `tool_input.command`
-//! Hook output (rewrite): `{"decision": "allow", "hookSpecificOutput": {"tool_input": {"command": "rewritten"}}}`
-//! Hook output (no-op):   `{"decision": "allow"}`
+//! Hook output (rewrite): `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"command":"rewritten"}}}`
+//! Hook output (no-op): no stdout, exit 0
 //!
 //! Exit 0 on ALL error paths — Codex CLI terminates on non-zero hook exit.
 
@@ -88,16 +88,19 @@ impl AgentInstaller for CodexInstaller {
 
         let script_str = script_path.to_string_lossy().to_string();
         // PANDA_AGENT=codex tells hook.rs to check ~/.codex for integrity
-        let hook_cmd = format!("PANDA_SESSION_ID=$PPID PANDA_AGENT=codex {} hook", panda_bin);
+        let hook_cmd = format!(
+            "PANDA_SESSION_ID=$PPID PANDA_AGENT=codex \"{}\" hook",
+            panda_bin
+        );
 
         // Remove any existing PandaFilter entries before re-inserting
         remove_panda_entries(&mut root, "PreToolUse");
         remove_panda_entries(&mut root, "PostToolUse");
 
         // Insert PreToolUse rewrite entry
-        insert_hook_entry(&mut root, "PreToolUse", "shell", &script_str);
+        insert_hook_entry(&mut root, "PreToolUse", "^Bash$", &script_str);
         // Insert PostToolUse compression entry
-        insert_hook_entry(&mut root, "PostToolUse", "shell", &hook_cmd);
+        insert_hook_entry(&mut root, "PostToolUse", "^Bash$", &hook_cmd);
 
         std::fs::write(&hooks_path, serde_json::to_string_pretty(&root)?)?;
 
@@ -168,21 +171,21 @@ fn generate_codex_rewrite_script(panda_bin: &str) -> String {
 INPUT=$(cat)
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 if [ -z "$CMD" ]; then
-  echo '{{"decision": "allow"}}'
   exit 0
 fi
 REWRITTEN=$(PANDA_SESSION_ID=$PPID "{panda_bin}" rewrite "$CMD" 2>/dev/null) || {{
-  echo '{{"decision": "allow"}}'
   exit 0
 }}
 if [ "$CMD" = "$REWRITTEN" ]; then
-  echo '{{"decision": "allow"}}'
   exit 0
 fi
-jq -n --arg cmd "$REWRITTEN" '{{
-  "decision": "allow",
+ORIGINAL_INPUT=$(echo "$INPUT" | jq -c '.tool_input // {{}}') || exit 0
+UPDATED_INPUT=$(echo "$ORIGINAL_INPUT" | jq --arg cmd "$REWRITTEN" '.command = $cmd') || exit 0
+jq -n --argjson updated "$UPDATED_INPUT" '{{
   "hookSpecificOutput": {{
-    "tool_input": {{"command": $cmd}}
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "updatedInput": $updated
   }}
 }}'
 "#,
@@ -197,22 +200,40 @@ fn remove_panda_entries(root: &mut serde_json::Value, event: &str) {
         .and_then(|h| h.get_mut(event))
         .and_then(|e| e.as_array_mut())
     {
-        arr.retain(|entry| {
-            // Check nested hooks array
-            if let Some(hooks) = entry["hooks"].as_array() {
-                let has_panda = hooks.iter().any(|h| {
-                    let c = h["command"].as_str().unwrap_or("");
-                    c.contains("panda") || c.contains("ccr")
+        for entry in arr.iter_mut() {
+            if let Some(hooks) = entry.get_mut("hooks").and_then(|h| h.as_array_mut()) {
+                hooks.retain(|hook| {
+                    let command = hook["command"].as_str().unwrap_or("");
+                    !is_panda_command(command)
                 });
-                if has_panda {
-                    return false;
-                }
             }
-            // Check top-level command
-            let cmd = entry["command"].as_str().unwrap_or("");
-            !cmd.contains("panda") && !cmd.contains("ccr")
+        }
+
+        arr.retain(|entry| {
+            let top_level_command = entry["command"].as_str().unwrap_or("");
+            if is_panda_command(top_level_command) {
+                return false;
+            }
+
+            entry
+                .get("hooks")
+                .and_then(|hooks| hooks.as_array())
+                .is_none_or(|hooks| !hooks.is_empty())
         });
     }
+}
+
+fn is_panda_command(command: &str) -> bool {
+    let installs_rewrite_script = command.split_whitespace().any(|token| {
+        std::path::Path::new(token.trim_matches(['\'', '"']))
+            .file_name()
+            .and_then(|name| name.to_str())
+            == Some("panda-rewrite.sh")
+    });
+    let runs_codex_post_hook =
+        command.contains("PANDA_AGENT=codex") && command.split_whitespace().any(|t| t == "hook");
+
+    installs_rewrite_script || runs_codex_post_hook
 }
 
 /// Insert a hook entry under `hooks.<event>` for the given `matcher` and `command`.
@@ -260,14 +281,31 @@ mod tests {
     #[test]
     fn insert_and_remove_entries() {
         let mut root = serde_json::json!({});
-        insert_hook_entry(&mut root, "PreToolUse", "shell", "/usr/local/bin/panda-rewrite.sh");
-        insert_hook_entry(&mut root, "PostToolUse", "shell", "PANDA_AGENT=codex /usr/local/bin/panda hook");
+        insert_hook_entry(
+            &mut root,
+            "PreToolUse",
+            "^Bash$",
+            "/usr/local/bin/panda-rewrite.sh",
+        );
+        insert_hook_entry(
+            &mut root,
+            "PostToolUse",
+            "^Bash$",
+            "PANDA_AGENT=codex /usr/local/bin/panda hook",
+        );
 
         assert!(root["hooks"]["PreToolUse"].as_array().unwrap().len() == 1);
         assert!(root["hooks"]["PostToolUse"].as_array().unwrap().len() == 1);
+        assert_eq!(root["hooks"]["PreToolUse"][0]["matcher"], "^Bash$");
+        assert_eq!(root["hooks"]["PostToolUse"][0]["matcher"], "^Bash$");
 
         // Inserting same command again should be a no-op
-        insert_hook_entry(&mut root, "PreToolUse", "shell", "/usr/local/bin/panda-rewrite.sh");
+        insert_hook_entry(
+            &mut root,
+            "PreToolUse",
+            "^Bash$",
+            "/usr/local/bin/panda-rewrite.sh",
+        );
         assert!(root["hooks"]["PreToolUse"].as_array().unwrap().len() == 1);
 
         remove_panda_entries(&mut root, "PreToolUse");
@@ -282,8 +320,15 @@ mod tests {
         let mut root = serde_json::json!({
             "hooks": {
                 "PreToolUse": [
-                    {"matcher": "shell", "hooks": [{"type": "command", "command": "/usr/bin/other-hook.sh"}]},
-                    {"matcher": "shell", "hooks": [{"type": "command", "command": "/usr/local/bin/panda-rewrite.sh"}]}
+                    {
+                        "matcher": "shell",
+                        "hooks": [
+                            {"type": "command", "command": "/usr/bin/other-hook.sh"},
+                            {"type": "command", "command": "/usr/local/bin/pandac-format"},
+                            {"type": "command", "command": "/opt/hooks/ccr-report"},
+                            {"type": "command", "command": "/usr/local/bin/panda-rewrite.sh"}
+                        ]
+                    }
                 ]
             }
         });
@@ -291,7 +336,11 @@ mod tests {
         remove_panda_entries(&mut root, "PreToolUse");
         let arr = root["hooks"]["PreToolUse"].as_array().unwrap();
         assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["matcher"], "shell");
+        assert_eq!(arr[0]["hooks"].as_array().unwrap().len(), 3);
         assert!(arr[0]["hooks"][0]["command"].as_str().unwrap().contains("other-hook"));
+        assert!(arr[0]["hooks"][1]["command"].as_str().unwrap().contains("pandac-format"));
+        assert!(arr[0]["hooks"][2]["command"].as_str().unwrap().contains("ccr-report"));
     }
 
     #[test]
@@ -300,6 +349,9 @@ mod tests {
         assert!(script.contains("/usr/local/bin/panda"));
         assert!(script.contains("rewrite"));
         assert!(script.contains("hookSpecificOutput"));
-        assert!(script.contains("tool_input"));
+        assert!(script.contains("\"hookEventName\": \"PreToolUse\""));
+        assert!(script.contains("\"permissionDecision\": \"allow\""));
+        assert!(script.contains("\"updatedInput\": $updated"));
+        assert!(!script.contains("\"decision\": \"allow\""));
     }
 }
